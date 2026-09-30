@@ -4,6 +4,7 @@ const path = require('node:path');
 
 const PORT = 3000;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const ACCOUNT_RE = /^[A-Za-z0-9:_-]{1,128}$/; // Jira accountIds; also keeps them safe inside JQL quotes
 const TIMEOUT_MS = 15000;
 const CONCURRENCY = 5;
 const DAY_MS = 86400000;
@@ -141,9 +142,9 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
-async function fetchMonth(jira, month, me) {
+async function fetchMonth(jira, month, person) {
   const r = monthRange(month);
-  const jql = `worklogAuthor = currentUser() AND worklogDate >= "${r.jqlFrom}" AND worklogDate <= "${r.jqlTo}"`;
+  const jql = `worklogAuthor = "${person.accountId}" AND worklogDate >= "${r.jqlFrom}" AND worklogDate <= "${r.jqlTo}"`;
 
   const issues = [];
   let nextPageToken;
@@ -171,12 +172,13 @@ async function fetchMonth(jira, month, me) {
   });
 
   const worklogsByIssue = Object.fromEntries(issues.map((issue, i) => [issue.key, lists[i]]));
-  return toEntries(issues, worklogsByIssue, me.accountId, month, me.timeZone);
+  return toEntries(issues, worklogsByIssue, person.accountId, month, person.timeZone);
 }
 
 function createServer({ jira, baseUrl, port, now = () => new Date() }) {
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]); // blocks DNS rebinding
-  const cache = new Map(); // `${month}|${tz}` -> response; past months only
+  const cache = new Map(); // `${accountId}|${month}|${tz}` -> response; past months only
+  const people = new Map(); // accountId -> { accountId, displayName, timeZone }
   let me;
 
   async function getMe() {
@@ -184,9 +186,19 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
       const user = await jira('/rest/api/3/myself');
       if (!user.accountId) throw new JiraError('Jira /myself returned no accountId', 502);
       if (!user.timeZone) console.warn('Jira profile has no timeZone; falling back to UTC');
-      me = { accountId: user.accountId, timeZone: user.timeZone || 'UTC' };
+      me = { accountId: user.accountId, displayName: user.displayName, timeZone: user.timeZone || 'UTC' };
     }
     return me;
+  }
+
+  async function getPerson(accountId) {
+    const self = await getMe();
+    if (!accountId || accountId === self.accountId) return self;
+    if (!people.has(accountId)) {
+      const user = await jira(`/rest/api/3/user?accountId=${encodeURIComponent(accountId)}`);
+      people.set(accountId, { accountId: user.accountId, displayName: user.displayName, timeZone: user.timeZone || 'UTC' });
+    }
+    return people.get(accountId);
   }
 
   return http.createServer(async (req, res) => {
@@ -203,6 +215,14 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(html);
       }
+      if (req.method === 'GET' && url.pathname === '/api/users') {
+        const q = (url.searchParams.get('q') || '').trim();
+        if (!q || q.length > 100) return json(400, { error: 'q must be 1-100 characters' });
+        const users = await jira(`/rest/api/3/user/search?query=${encodeURIComponent(q)}&maxResults=20`);
+        return json(200, users
+          .filter((u) => u.accountType === 'atlassian' && u.active)
+          .map((u) => ({ accountId: u.accountId, displayName: u.displayName, avatarUrl: u.avatarUrls?.['24x24'] || '' })));
+      }
       if (req.method !== 'GET' || url.pathname !== '/api/worklogs') return json(404, { error: 'Not found' });
 
       const month = url.searchParams.get('month') || '';
@@ -211,12 +231,16 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
       const tzParam = url.searchParams.get('tz');
       if (tzParam && !isValidTimeZone(tzParam)) return json(400, { error: 'tz must be an IANA timezone' });
 
-      const { accountId, timeZone: profileTimeZone } = await getMe();
+      const account = url.searchParams.get('account');
+      if (account && !ACCOUNT_RE.test(account)) return json(400, { error: 'account must be a Jira accountId' });
+
+      const { accountId, displayName, timeZone: profileTimeZone } = await getPerson(account);
       const timeZone = tzParam || profileTimeZone;
-      const key = `${month}|${timeZone}`;
+      const key = `${accountId}|${month}|${timeZone}`;
       const past = isPastMonth(month, timeZone, now());
       if (past && url.searchParams.get('refresh') !== '1' && cache.has(key)) return json(200, cache.get(key));
-      const body = { baseUrl, timeZone, profileTimeZone, entries: await fetchMonth(jira, month, { accountId, timeZone }) };
+      const person = { accountId, displayName };
+      const body = { baseUrl, timeZone, profileTimeZone, person, entries: await fetchMonth(jira, month, { accountId, timeZone }) };
       if (past) cache.set(key, body);
       json(200, body);
     } catch (err) {

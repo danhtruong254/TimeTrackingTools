@@ -88,15 +88,23 @@
     mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") center / contain no-repeat; }
   .tz select { appearance: none; -webkit-appearance: none; height: 44px; padding: 0 40px 0 14px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 14px; cursor: pointer; }
   .tz select:hover { background: var(--bg-hover); }
+  .combo { position: relative; }
+  .combo input { width: 240px; height: 44px; padding: 0 14px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 14px; }
+  .combo input:hover { background: var(--bg-hover); }
+  .combo ul { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 300px; max-height: 320px; overflow: auto; margin: 0; padding: 4px; list-style: none; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); }
+  .combo li { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 10px; border-radius: var(--radius-sm); color: var(--fg); font-size: 14px; cursor: pointer; }
+  .combo li[aria-selected="true"], .combo li:hover { background: var(--bg-hover); }
+  .combo li.hint { color: var(--fg-muted); cursor: default; background: none; }
+  .avatar { width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; background: var(--track); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--fg-muted); }
   .status { font-size: 13px; color: var(--fg-muted); min-width: 60px; }
 
   .kpis { display: flex; flex-wrap: wrap; gap: 12px; }
-  .kpi { width: 120px; padding: 12px 16px; display: flex; flex-direction: column; justify-content: center; gap: 6px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+  .kpi { min-width: 120px; padding: 12px 16px; display: flex; flex-direction: column; justify-content: center; gap: 6px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-lg); }
   .kpi-wide { width: 260px; }
   .kpi-head { display: flex; justify-content: space-between; align-items: baseline; }
   .kpi-label { font-size: 12px; font-weight: 500; color: var(--fg-muted); }
   .kpi-note { font-size: 12px; color: var(--fg-muted); }
-  .kpi-value { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .kpi-value { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
   .kpi-alert { background: var(--red-soft); border-color: var(--red-border); }
   .kpi .track { height: 6px; }
 
@@ -206,6 +214,12 @@
     <button id="refresh" class="btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>Refresh</button>
     <button id="copy" class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy summary</button>
     <label class="tz">Time zone <span class="select-wrap"><select id="tz"><option value="Asia/Ho_Chi_Minh">UTC+7 (local)</option><option value="">Jira profile</option></select></span></label>
+    <label class="tz" for="person">Viewing
+      <span class="combo">
+        <input id="person" type="text" role="combobox" aria-expanded="false" aria-controls="person-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search people…">
+        <ul id="person-list" role="listbox" aria-label="People" hidden></ul>
+      </span>
+    </label>
     <span id="status" class="status" aria-live="polite"></span>
   </div>
   <div id="kpis" class="kpis"></div>
@@ -278,6 +292,8 @@ function savedTz() {
   try { return localStorage.getItem('tz') ?? DEFAULT_TZ; } catch { return DEFAULT_TZ; }
 }
 let tzChoice = savedTz();
+// Whose worklogs to show: null = me, else { accountId, displayName }. Remembered per browser.
+let personChoice = (() => { try { return JSON.parse(localStorage.getItem('person')) || null; } catch { return null; } })();
 
 // First month is guessed locally; the first load re-loads once if the server's timeZone says today is in another month.
 let seq = 0; // request token: only the latest load may touch state
@@ -328,7 +344,8 @@ async function load(month, refresh = false, initial = false) {
   render();
   try {
     const tz = tzChoice ? `&tz=${encodeURIComponent(tzChoice)}` : '';
-    const res = await fetch(`/api/worklogs?month=${month}${refresh ? '&refresh=1' : ''}${tz}`);
+    const account = personChoice ? `&account=${encodeURIComponent(personChoice.accountId)}` : '';
+    const res = await fetch(`/api/worklogs?month=${month}${refresh ? '&refresh=1' : ''}${tz}${account}`);
     const body = (await res.json().catch(() => null)) || {};
     if (id !== seq) return;
     if (!res.ok) {
@@ -450,6 +467,7 @@ function render() {
   }
   $('main').style.display = '';
   $('main').classList.toggle('busy', state.loading);
+  if (document.activeElement !== $('#person')) $('#person').value = personLabel();
   const v = compute(state.data, state.month);
 
   const pct = v.target ? Math.round((v.logged / v.target) * 100) : 0;
@@ -480,7 +498,7 @@ async function copySummary() {
   if (!state.data) return;
   const v = compute(state.data, state.month);
   const lines = [
-    `Jira time — ${state.month} (${state.data.timeZone})`,
+    `Jira time — ${state.data.person.displayName} — ${state.month} (${state.data.timeZone})`,
     `Logged ${fmt(v.logged)} · Target ${fmt(v.target)} · Gap days ${v.gapDays} · Missing ${fmt(v.missing)}`,
     '',
     ...v.days.filter((d) => d.status !== 'future')
@@ -497,6 +515,89 @@ async function copySummary() {
     render();
   }
 }
+
+// ---- People picker: searchable combobox (type to search Jira users, arrows + Enter to pick, Esc to cancel). ----
+const personLabel = () => (personChoice ? personChoice.displayName : `${state.data?.person?.displayName || 'Me'} (you)`);
+let people = []; // options currently listed: [{ accountId: '' for me, displayName, avatarUrl }]
+let activeIndex = -1;
+let searchSeq = 0;
+let searchTimer;
+
+function initials(name) {
+  return esc(name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase());
+}
+
+function showPeople(list, hint) {
+  people = list;
+  activeIndex = list.length ? 0 : -1;
+  const ul = $('#person-list');
+  ul.innerHTML = list.map((p, i) => `<li id="person-opt-${i}" role="option" aria-selected="${i === activeIndex}" data-i="${i}">${p.avatarUrl ? `<img class="avatar" src="${esc(p.avatarUrl)}" alt="">` : `<span class="avatar" aria-hidden="true">${initials(p.displayName)}</span>`}<span>${esc(p.displayName)}</span></li>`).join('')
+    + (hint ? `<li class="hint" aria-disabled="true">${esc(hint)}</li>` : '');
+  ul.hidden = false;
+  $('#person').setAttribute('aria-expanded', 'true');
+  $('#person').setAttribute('aria-activedescendant', activeIndex >= 0 ? `person-opt-${activeIndex}` : '');
+}
+
+function closePeople() {
+  $('#person-list').hidden = true;
+  $('#person').setAttribute('aria-expanded', 'false');
+  $('#person').removeAttribute('aria-activedescendant');
+}
+
+const meOption = () => ({ accountId: '', displayName: `${state.data?.person && !personChoice ? state.data.person.displayName : 'Me'} (you)`, avatarUrl: '' });
+
+async function searchPeople(q) {
+  const id = ++searchSeq;
+  if (!q) return showPeople([meOption()]);
+  showPeople([], 'Searching…');
+  try {
+    const res = await fetch(`/api/users?q=${encodeURIComponent(q)}`);
+    const body = await res.json();
+    if (id !== searchSeq) return;
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    showPeople(body, body.length ? '' : 'No people found');
+  } catch (err) {
+    if (id === searchSeq) showPeople([], `Search failed: ${err.message}`);
+  }
+}
+
+function pickPerson(p) {
+  personChoice = p.accountId ? { accountId: p.accountId, displayName: p.displayName } : null;
+  try { localStorage.setItem('person', JSON.stringify(personChoice)); } catch {}
+  closePeople();
+  $('#person').value = personLabel();
+  $('#person').blur();
+  state.selected = null;
+  load(state.pending || state.month || initialMonth);
+}
+
+function moveActive(delta) {
+  if (!people.length) return;
+  activeIndex = (activeIndex + delta + people.length) % people.length;
+  for (const li of $('#person-list').querySelectorAll('[role="option"]')) li.setAttribute('aria-selected', li.dataset.i === String(activeIndex));
+  $('#person').setAttribute('aria-activedescendant', `person-opt-${activeIndex}`);
+  document.getElementById(`person-opt-${activeIndex}`).scrollIntoView({ block: 'nearest' });
+}
+
+$('#person').onfocus = (e) => { e.target.select(); showPeople([meOption()]); };
+$('#person').oninput = (e) => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  searchTimer = setTimeout(() => searchPeople(q), 250);
+};
+$('#person').onkeydown = (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); moveActive(1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(-1); }
+  else if (e.key === 'Enter') { e.preventDefault(); if (people[activeIndex]) pickPerson(people[activeIndex]); }
+  else if (e.key === 'Escape') { closePeople(); e.target.value = personLabel(); e.target.blur(); }
+};
+$('#person').onblur = () => { clearTimeout(searchTimer); searchSeq++; closePeople(); $('#person').value = personLabel(); };
+$('#person-list').onmousedown = (e) => e.preventDefault(); // keep focus in the input while clicking an option
+$('#person-list').onclick = (e) => {
+  const li = e.target.closest('[role="option"]');
+  if (li) pickPerson(people[Number(li.dataset.i)]);
+};
+$('#person').value = personLabel();
 
 $('#prev').onclick = () => load(shiftMonth(state.pending || state.month || initialMonth, -1));
 $('#next').onclick = () => load(shiftMonth(state.pending || state.month || initialMonth, 1));

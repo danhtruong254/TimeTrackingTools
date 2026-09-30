@@ -101,6 +101,12 @@ Ported from the `Main.dc.html` design canvas and `tokens.json`; display only, th
 - Day cell: tinted by tone — green ≥ target, amber partial, red a workday with 0h; Sat/Sun or a target-0 day with 0h shows "—" neutral (display only: KPIs still count them per `TARGETS`). 4px progress bar vs the day's target, "+Xh Ym" when over, "Today" chip + accent ring; selected day gets a 2px accent ring. Legend under the grid.
 - Right panel: day or month title with total and "N entries · M tickets", segmented tabs By ticket / Entries (By project was removed). `[..]` summary prefixes render as chips. Entries (with comments) replaces the old bottom day-detail list and shows each entry's date when no day is selected. Empty state: dashed box with a clock icon.
 
+### People picker
+
+- Header "Viewing" combobox, default me. Typing searches Jira users (`GET /api/users?q=` → server calls `/rest/api/3/user/search`, keeps active `atlassian` accounts, returns `{accountId, displayName, avatarUrl}`; debounced 250 ms, stale results dropped). Arrow keys + Enter pick, Esc cancels. Choice kept in `localStorage`.
+- `/api/worklogs` takes optional `account=<accountId>` (validated `^[A-Za-z0-9:_-]{1,128}$`, 400 otherwise). JQL is `worklogAuthor = "<accountId>"` for everyone, including me; `toEntries` filters by that accountId. The person's profile timezone (from `/rest/api/3/user?accountId=`, cached) backs the "Jira profile" option. Cache key is `accountId|month|tz`. Response adds `person: {accountId, displayName}`; Copy summary names the person.
+- Visibility follows Jira permissions: worklogs on issues the API token's user can't browse are not returned.
+
 ## Error handling
 
 - Missing env var at startup: exit with a message naming the missing variable.

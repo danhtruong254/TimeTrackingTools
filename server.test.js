@@ -173,7 +173,7 @@ test('fetchMonth pages search and worklogs, narrows by started, then filters', a
     ['2026-09-01', 'EF-1', 3600],
     ['2026-09-02', 'OPS-2', 1800],
   ]);
-  assert.equal(calls[0].body.jql, 'worklogAuthor = currentUser() AND worklogDate >= "2026-08-31" AND worklogDate <= "2026-10-01"');
+  assert.equal(calls[0].body.jql, 'worklogAuthor = "me-123" AND worklogDate >= "2026-08-31" AND worklogDate <= "2026-10-01"');
   assert.deepEqual(calls[0].body.fields, ['summary', 'project']);
   const q = new URL(calls.find((c) => c.p.startsWith('/rest/api/3/issue/EF-1/worklog')).p, 'http://x').searchParams;
   assert.equal(q.get('startedAfter'), String(Date.UTC(2026, 7, 31)));
@@ -202,10 +202,19 @@ function get(pathname, host = `127.0.0.1:${TEST_PORT}`) {
   });
 }
 
-function fakeJira(myself = { accountId: ME, timeZone: 'UTC' }) {
-  const jira = async (p) => {
+function fakeJira(myself = { accountId: ME, displayName: 'Me Myself', timeZone: 'UTC' }) {
+  const jira = async (p, init) => {
     if (p === '/rest/api/3/myself') return myself;
-    if (p === '/rest/api/3/search/jql') { jira.searches++; return { issues: [] }; }
+    if (p === '/rest/api/3/search/jql') { jira.searches++; jira.lastJql = JSON.parse(init.body).jql; return { issues: [] }; }
+    if (p === '/rest/api/3/user?accountId=acc-2') return { accountId: 'acc-2', displayName: 'Thuy Ha', timeZone: 'Asia/Ho_Chi_Minh' };
+    if (p.startsWith('/rest/api/3/user/search?')) {
+      jira.lastUserSearch = p;
+      return [
+        { accountId: 'acc-2', displayName: 'Thuy Ha', accountType: 'atlassian', active: true, avatarUrls: { '24x24': 'https://a/24.png' } },
+        { accountId: 'acc-3', displayName: 'Thuy Old', accountType: 'atlassian', active: false, avatarUrls: {} },
+        { accountId: 'bot-1', displayName: 'Thuy Bot', accountType: 'app', active: true, avatarUrls: {} },
+      ];
+    }
     throw new Error(`unexpected ${p}`);
   };
   jira.searches = 0;
@@ -233,7 +242,7 @@ test('server caches past months only; refresh=1 bypasses', async () => {
   const server = await startServer(jira);
   try {
     const first = await get('/api/worklogs?month=2026-08');
-    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', entries: [] });
+    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', person: { accountId: ME, displayName: 'Me Myself' }, entries: [] });
     await get('/api/worklogs?month=2026-08');
     assert.equal(jira.searches, 1);
     await get('/api/worklogs?month=2026-08&refresh=1');
@@ -318,4 +327,34 @@ test('adfText flattens Jira ADF comments to plain text', () => {
 test('toEntries includes the worklog comment as plain text', () => {
   const w = { ...wl(ME, '2026-09-10T09:00:00.000+0000', 60), comment: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Reviewed PR' }] }] } };
   assert.equal(toEntries(issues, { 'EF-1': [w] }, ME, '2026-09', 'UTC')[0].comment, 'Reviewed PR');
+});
+
+test('server shows another person with the account param', async () => {
+  const jira = fakeJira();
+  const server = await startServer(jira);
+  try {
+    const r = await get('/api/worklogs?month=2026-08&account=acc-2');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.person, { accountId: 'acc-2', displayName: 'Thuy Ha' });
+    assert.equal(r.body.profileTimeZone, 'Asia/Ho_Chi_Minh');
+    assert.match(jira.lastJql, /^worklogAuthor = "acc-2" AND/);
+    const mine = await get('/api/worklogs?month=2026-08');
+    assert.deepEqual(mine.body.person, { accountId: ME, displayName: 'Me Myself' });
+    assert.match(jira.lastJql, /^worklogAuthor = "me-123" AND/);
+    assert.equal(jira.searches, 2); // cached per person
+    assert.equal((await get('/api/worklogs?month=2026-08&account=bad%22id')).status, 400);
+  } finally { server.close(); }
+});
+
+test('server searches active human users', async () => {
+  const jira = fakeJira();
+  const server = await startServer(jira);
+  try {
+    const r = await get('/api/users?q=th%20u');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, [{ accountId: 'acc-2', displayName: 'Thuy Ha', avatarUrl: 'https://a/24.png' }]);
+    assert.equal(jira.lastUserSearch, '/rest/api/3/user/search?query=th%20u&maxResults=20');
+    assert.equal((await get('/api/users?q=')).status, 400);
+    assert.equal((await get('/api/users')).status, 400);
+  } finally { server.close(); }
 });
