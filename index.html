@@ -22,8 +22,8 @@
   .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
   .dow { font-size: 12px; color: var(--muted); text-align: center; }
   .day { display: block; width: 100%; min-height: 52px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; text-align: left; font: inherit; color: inherit; background: transparent; }
-  .day .n { font-size: 12px; color: var(--muted); }
-  .day .h { font-weight: 600; }
+  .day .n { display: block; font-size: 12px; color: var(--muted); }
+  .day .h { display: block; font-weight: 600; }
   .day.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); border-color: var(--ok); }
   .day.low { background: color-mix(in srgb, var(--low) 22%, transparent); border-color: var(--low); }
   .day.zero { background: color-mix(in srgb, var(--zero) 18%, transparent); border-color: var(--zero); }
@@ -190,7 +190,7 @@ function render() {
   $('#cal').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="dow">${d}</div>`).join('')
     + '<div></div>'.repeat(lead)
     + v.days.map((d) => `<button type="button" class="day ${d.status}${d.date === state.selected ? ' sel' : ''}" data-date="${d.date}" aria-pressed="${d.date === state.selected}" aria-label="${d.date} ${weekday(d.date)}, ${d.status === 'future' ? '' : `${fmt(d.logged)}, `}${STATUS_TEXT[d.status]}"${d.status === 'future' ? ' disabled' : ''}>
-        <div class="n">${Number(d.date.slice(8))}</div>${d.status === 'future' ? '' : `<div class="h">${fmt(d.logged)}</div>`}</button>`).join('');
+        <span class="n">${Number(d.date.slice(8))}</span>${d.status === 'future' ? '' : `<span class="h">${fmt(d.logged)}</span>`}</button>`).join('');
 
   const entries = state.data.entries.filter((e) => !state.selected || e.date === state.selected);
   const rows = groupTotals(entries, state.groupBy);
@@ -244,6 +244,7 @@ $('#cal').onclick = (e) => {
   if (!el || el.classList.contains('future')) return;
   state.selected = state.selected === el.dataset.date ? null : el.dataset.date;
   render();
+  document.querySelector(`#cal [data-date="${el.dataset.date}"]`).focus();
 };
 
 load(initialMonth, false, true);
