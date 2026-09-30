@@ -156,7 +156,7 @@
   .caption { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-subtle); }
   .side-title, .side-sum { font-size: 20px; font-weight: 700; }
   .side-sub { font-size: 12px; color: var(--fg-muted); }
-  .tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 10px; }
+  .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 10px; }
   .tabs button { height: 36px; border: 0; border-radius: 7px; font-size: 13px; font-weight: 600; background: transparent; color: var(--fg-muted); }
   .tabs button[aria-pressed="true"] { background: var(--bg-elev); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
   .list { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
@@ -168,12 +168,6 @@
   .chip { padding: 1px 7px; font-size: 11px; font-weight: 500; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 99px; }
   .dur { font-size: 13px; font-weight: 700; white-space: nowrap; }
   .title { font-size: 13.5px; line-height: 1.4; }
-  .proj { padding: 16px 0; gap: 8px; }
-  .proj .row-head { align-items: baseline; }
-  .proj-name { font-size: 15px; font-weight: 600; }
-  .proj .dur { font-size: 14px; }
-  .proj .track { height: 8px; }
-  .sub { font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .entry-head { display: flex; align-items: center; gap: 12px; }
   .entry-head .key { width: 78px; flex-shrink: 0; }
   .entry-head .title { flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -241,7 +235,6 @@
     </div>
     <div class="tabs" role="group" aria-label="Breakdown view">
       <button type="button" data-view="ticket">By ticket</button>
-      <button type="button" data-view="project">By project</button>
       <button type="button" data-view="entries">Entries</button>
     </div>
     <div id="list" class="list"></div>
@@ -405,17 +398,6 @@ function renderList(entries) {
   if (!entries.length) {
     const where = state.selected ? `on ${dayLabel(state.selected)}` : 'this month';
     return `<div class="empty">${CLOCK_ICON}<span class="empty-title">No worklogs ${where}</span><span>Log time in Jira to fill this ${state.selected ? 'day' : 'month'}</span></div>`;
-  }
-  if (state.groupBy === 'project') {
-    const rows = groupTotals(entries, 'project');
-    return rows.map((r) => {
-      const keys = [...new Set(entries.filter((e) => e.project === r.key).map((e) => e.issueKey))];
-      return `<div class="row proj">
-        <div class="row-head"><span class="proj-name">${esc(r.key)}</span><span class="dur">${fmt(r.seconds)}</span></div>
-        ${bar((r.seconds / rows[0].seconds) * 100)}
-        <span class="sub">${plural(keys.length, 'ticket')} · ${keys.map(esc).join(', ')}</span>
-      </div>`;
-    }).join('');
   }
   if (state.groupBy === 'entries') {
     return entries.map((e) => `<div class="row">
