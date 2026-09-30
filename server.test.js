@@ -36,3 +36,49 @@ test('isPastMonth compares against the current month in tz', () => {
   assert.equal(isPastMonth('2026-08', 'UTC', now), true);
   assert.equal(isPastMonth('2026-10', 'UTC', now), false);
 });
+
+const { toEntries } = require('./server');
+
+const ME = 'me-123';
+const issues = [
+  { key: 'EF-1', fields: { summary: 'Login bug', project: { key: 'EF' } } },
+  { key: 'OPS-2', fields: { summary: 'Deploy', project: { key: 'OPS' } } },
+];
+const wl = (accountId, started, timeSpentSeconds) => ({ author: { accountId }, started, timeSpentSeconds });
+
+test('toEntries drops worklogs by other authors', () => {
+  const out = toEntries(issues, {
+    'EF-1': [wl(ME, '2026-09-10T09:00:00.000+0700', 3600), wl('other', '2026-09-10T09:00:00.000+0700', 7200)],
+  }, ME, '2026-09', 'Asia/Ho_Chi_Minh');
+  assert.deepEqual(out, [{ date: '2026-09-10', issueKey: 'EF-1', summary: 'Login bug', project: 'EF', seconds: 3600 }]);
+});
+
+test('toEntries drops dates outside the month, including the widened days', () => {
+  const out = toEntries(issues, {
+    'EF-1': [
+      wl(ME, '2026-08-31T10:00:00.000+0700', 60),
+      wl(ME, '2026-09-15T10:00:00.000+0700', 120),
+      wl(ME, '2026-10-01T10:00:00.000+0700', 180),
+    ],
+  }, ME, '2026-09', 'Asia/Ho_Chi_Minh');
+  assert.deepEqual(out.map((e) => [e.date, e.seconds]), [['2026-09-15', 120]]);
+});
+
+test('toEntries parses Jira started format (+0000) and applies tz, not the offset', () => {
+  const byIssue = { 'EF-1': [wl(ME, '2026-09-30T23:30:00.000+0000', 1800)] };
+  assert.deepEqual(toEntries(issues, byIssue, ME, '2026-09', 'Asia/Ho_Chi_Minh'), []);
+  assert.deepEqual(toEntries(issues, byIssue, ME, '2026-10', 'Asia/Ho_Chi_Minh').map((e) => e.date), ['2026-10-01']);
+  assert.deepEqual(toEntries(issues, byIssue, ME, '2026-09', 'UTC').map((e) => e.date), ['2026-09-30']);
+});
+
+test('toEntries keeps every worklog on the same day and sorts by date', () => {
+  const out = toEntries(issues, {
+    'EF-1': [wl(ME, '2026-09-12T09:00:00.000+0000', 3600), wl(ME, '2026-09-12T14:00:00.000+0000', 7200)],
+    'OPS-2': [wl(ME, '2026-09-11T09:00:00.000+0000', 1800)],
+  }, ME, '2026-09', 'UTC');
+  assert.deepEqual(out.map((e) => [e.date, e.issueKey, e.seconds]), [
+    ['2026-09-11', 'OPS-2', 1800],
+    ['2026-09-12', 'EF-1', 3600],
+    ['2026-09-12', 'EF-1', 7200],
+  ]);
+});

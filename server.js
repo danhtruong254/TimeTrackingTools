@@ -49,4 +49,24 @@ function isPastMonth(month, tz, now) {
   return month < localDate(now, tz).slice(0, 7);
 }
 
-module.exports = { normalizeStarted, localDate, monthRange, isPastMonth };
+// Source of truth for filtering: my worklogs whose local date (in tz) is inside month.
+function toEntries(issues, worklogsByIssue, accountId, month, tz) {
+  const entries = [];
+  for (const issue of issues) {
+    for (const w of worklogsByIssue[issue.key] || []) {
+      if (w.author?.accountId !== accountId) continue;
+      const date = localDate(new Date(normalizeStarted(w.started)), tz);
+      if (!date.startsWith(`${month}-`)) continue;
+      entries.push({
+        date,
+        issueKey: issue.key,
+        summary: issue.fields.summary,
+        project: issue.fields.project.key,
+        seconds: w.timeSpentSeconds,
+      });
+    }
+  }
+  return entries.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+module.exports = { normalizeStarted, localDate, monthRange, isPastMonth, toEntries };
