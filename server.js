@@ -69,4 +69,42 @@ function toEntries(issues, worklogsByIssue, accountId, month, tz) {
   return entries.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-module.exports = { normalizeStarted, localDate, monthRange, isPastMonth, toEntries };
+class JiraError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status; // Jira HTTP status, or 504 timeout / 502 network failure
+  }
+}
+
+// Retry-After in seconds; 2s when missing or not a number; never more than 30s.
+function retryDelayMs(header) {
+  const s = header ? Number(header) : NaN;
+  return Math.min(Number.isFinite(s) && s >= 0 ? s * 1000 : 2000, 30000);
+}
+
+function createJira({ baseUrl, email, token, fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+  const headers = {
+    Authorization: `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+  async function once(pathname, init) {
+    try {
+      return await fetchImpl(baseUrl + pathname, { ...init, headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    } catch (err) {
+      if (err.name === 'TimeoutError') throw new JiraError(`Jira request timed out: ${pathname}`, 504);
+      throw new JiraError(`Jira request failed: ${err.message}`, 502);
+    }
+  }
+  return async function jira(pathname, init = {}) {
+    let res = await once(pathname, init);
+    if (res.status === 429) {
+      await sleep(retryDelayMs(res.headers.get('retry-after')));
+      res = await once(pathname, init);
+    }
+    if (!res.ok) throw new JiraError(`Jira ${res.status} on ${pathname}`, res.status);
+    return res.json();
+  };
+}
+
+module.exports = { normalizeStarted, localDate, monthRange, isPastMonth, toEntries, JiraError, retryDelayMs, createJira };
