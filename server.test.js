@@ -128,3 +128,55 @@ test('createJira maps a timeout to a 504 JiraError', async () => {
   const jira = createJira({ ...jiraOpts, fetchImpl: async () => { throw new DOMException('timed out', 'TimeoutError'); } });
   await assert.rejects(jira('/x'), (e) => e instanceof JiraError && e.status === 504);
 });
+const { fetchMonth, mapLimit } = require('./server');
+
+test('mapLimit keeps order and caps concurrency', async () => {
+  let active = 0;
+  let peak = 0;
+  const out = await mapLimit([1, 2, 3, 4, 5, 6, 7], 3, async (n) => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, 5));
+    active--;
+    return n * 2;
+  });
+  assert.deepEqual(out, [2, 4, 6, 8, 10, 12, 14]);
+  assert.equal(peak, 3);
+});
+
+test('mapLimit rejects when any item fails', async () => {
+  await assert.rejects(mapLimit([1, 2, 3], 2, async (n) => { if (n === 2) throw new Error('boom'); return n; }), /boom/);
+});
+
+test('fetchMonth pages search and worklogs, narrows by started, then filters', async () => {
+  const calls = [];
+  const jira = async (p, init) => {
+    calls.push({ p, body: init?.body && JSON.parse(init.body) });
+    if (p === '/rest/api/3/search/jql') {
+      return JSON.parse(init.body).nextPageToken ? { issues: [issues[1]] } : { issues: [issues[0]], nextPageToken: 'p2' };
+    }
+    const q = new URL(p, 'http://x').searchParams;
+    if (p.startsWith('/rest/api/3/issue/EF-1/worklog')) {
+      return q.get('startAt') === '0'
+        ? { startAt: 0, total: 2, worklogs: [wl(ME, '2026-09-01T09:00:00.000+0000', 3600)] }
+        : { startAt: 1, total: 2, worklogs: [wl('other', '2026-09-01T09:00:00.000+0000', 60)] };
+    }
+    if (p.startsWith('/rest/api/3/issue/OPS-2/worklog')) {
+      return { startAt: 0, total: 1, worklogs: [wl(ME, '2026-09-02T09:00:00.000+0000', 1800)] };
+    }
+    throw new Error(`unexpected ${p}`);
+  };
+
+  const entries = await fetchMonth(jira, '2026-09', { accountId: ME, timeZone: 'UTC' });
+
+  assert.deepEqual(entries.map((e) => [e.date, e.issueKey, e.seconds]), [
+    ['2026-09-01', 'EF-1', 3600],
+    ['2026-09-02', 'OPS-2', 1800],
+  ]);
+  assert.equal(calls[0].body.jql, 'worklogAuthor = currentUser() AND worklogDate >= "2026-08-31" AND worklogDate <= "2026-10-01"');
+  assert.deepEqual(calls[0].body.fields, ['summary', 'project']);
+  const q = new URL(calls.find((c) => c.p.startsWith('/rest/api/3/issue/EF-1/worklog')).p, 'http://x').searchParams;
+  assert.equal(q.get('startedAfter'), String(Date.UTC(2026, 7, 31)));
+  assert.equal(q.get('startedBefore'), String(Date.UTC(2026, 9, 2)));
+  assert.equal(calls.filter((c) => c.p.startsWith('/rest/api/3/issue/EF-1/worklog')).length, 2);
+});

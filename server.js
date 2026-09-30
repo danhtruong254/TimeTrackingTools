@@ -107,4 +107,51 @@ function createJira({ baseUrl, email, token, fetchImpl = fetch, sleep = (ms) => 
   };
 }
 
-module.exports = { normalizeStarted, localDate, monthRange, isPastMonth, toEntries, JiraError, retryDelayMs, createJira };
+// Like Promise.all over items, with at most `limit` in flight. Rejects on the first failure.
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+async function fetchMonth(jira, month, me) {
+  const r = monthRange(month);
+  const jql = `worklogAuthor = currentUser() AND worklogDate >= "${r.jqlFrom}" AND worklogDate <= "${r.jqlTo}"`;
+
+  const issues = [];
+  let nextPageToken;
+  do {
+    const page = await jira('/rest/api/3/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({ jql, fields: ['summary', 'project'], maxResults: 100, nextPageToken }),
+    });
+    issues.push(...page.issues);
+    nextPageToken = page.nextPageToken;
+  } while (nextPageToken);
+
+  // Any failed issue rejects the whole month: partial data would show fake gaps.
+  const lists = await mapLimit(issues, CONCURRENCY, async (issue) => {
+    const all = [];
+    let startAt = 0;
+    for (;;) {
+      const page = await jira(
+        `/rest/api/3/issue/${issue.key}/worklog?startedAfter=${r.startedAfter}&startedBefore=${r.startedBefore}&startAt=${startAt}&maxResults=5000`,
+      );
+      all.push(...page.worklogs);
+      startAt += page.worklogs.length;
+      if (page.worklogs.length === 0 || startAt >= page.total) return all;
+    }
+  });
+
+  const worklogsByIssue = Object.fromEntries(issues.map((issue, i) => [issue.key, lists[i]]));
+  return toEntries(issues, worklogsByIssue, me.accountId, month, me.timeZone);
+}
+
+module.exports = { normalizeStarted, localDate, monthRange, isPastMonth, toEntries, JiraError, retryDelayMs, createJira, mapLimit, fetchMonth };
