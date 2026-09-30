@@ -179,8 +179,9 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
     try {
       const url = new URL(req.url, 'http://localhost');
       if (req.method === 'GET' && url.pathname === '/') {
+        const html = fs.readFileSync(path.join(__dirname, 'index.html'));
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(fs.readFileSync(path.join(__dirname, 'index.html')));
+        return res.end(html);
       }
       if (req.method !== 'GET' || url.pathname !== '/api/worklogs') return json(404, { error: 'Not found' });
 
