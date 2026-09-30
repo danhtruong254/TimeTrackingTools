@@ -180,3 +180,93 @@ test('fetchMonth pages search and worklogs, narrows by started, then filters', a
   assert.equal(q.get('startedBefore'), String(Date.UTC(2026, 9, 2)));
   assert.equal(calls.filter((c) => c.p.startsWith('/rest/api/3/issue/EF-1/worklog')).length, 2);
 });
+
+const http = require('node:http');
+const { createServer } = require('./server');
+
+const TEST_PORT = 3999;
+const NOW = () => new Date('2026-09-15T12:00:00Z');
+
+function startServer(jira) {
+  const server = createServer({ jira, baseUrl: 'https://x.atlassian.net', port: TEST_PORT, now: NOW });
+  return new Promise((resolve) => server.listen(TEST_PORT, '127.0.0.1', () => resolve(server)));
+}
+
+function get(pathname, host = `127.0.0.1:${TEST_PORT}`) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: TEST_PORT, path: pathname, headers: { Host: host }, agent: false }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+    }).on('error', reject);
+  });
+}
+
+function fakeJira(myself = { accountId: ME, timeZone: 'UTC' }) {
+  const jira = async (p) => {
+    if (p === '/rest/api/3/myself') return myself;
+    if (p === '/rest/api/3/search/jql') { jira.searches++; return { issues: [] }; }
+    throw new Error(`unexpected ${p}`);
+  };
+  jira.searches = 0;
+  return jira;
+}
+
+test('server rejects a foreign Host header', async () => {
+  const server = await startServer(fakeJira());
+  try {
+    assert.equal((await get('/api/worklogs?month=2026-09', `evil.example:${TEST_PORT}`)).status, 403);
+  } finally { server.close(); }
+});
+
+test('server validates month', async () => {
+  const server = await startServer(fakeJira());
+  try {
+    assert.equal((await get('/api/worklogs?month=2026-13')).status, 400);
+    assert.equal((await get('/api/worklogs?month=2026-9')).status, 400);
+    assert.equal((await get('/api/worklogs')).status, 400);
+  } finally { server.close(); }
+});
+
+test('server caches past months only; refresh=1 bypasses', async () => {
+  const jira = fakeJira();
+  const server = await startServer(jira);
+  try {
+    const first = await get('/api/worklogs?month=2026-08');
+    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', entries: [] });
+    await get('/api/worklogs?month=2026-08');
+    assert.equal(jira.searches, 1);
+    await get('/api/worklogs?month=2026-08&refresh=1');
+    assert.equal(jira.searches, 2);
+    await get('/api/worklogs?month=2026-09');
+    await get('/api/worklogs?month=2026-09');
+    assert.equal(jira.searches, 4);
+  } finally { server.close(); }
+});
+
+test('server falls back to UTC when Jira has no timeZone', async () => {
+  const server = await startServer(fakeJira({ accountId: ME, timeZone: null }));
+  try {
+    assert.equal((await get('/api/worklogs?month=2026-08')).body.timeZone, 'UTC');
+  } finally { server.close(); }
+});
+
+test('server fails when Jira returns no accountId', async () => {
+  const server = await startServer(fakeJira({ timeZone: 'UTC' }));
+  try {
+    assert.equal((await get('/api/worklogs?month=2026-08')).status, 502);
+  } finally { server.close(); }
+});
+
+test('server maps Jira errors to 502/504 with the Jira status', async () => {
+  const unauthorized = await startServer(async () => { throw new JiraError('Jira 401 on /rest/api/3/myself', 401); });
+  try {
+    const r = await get('/api/worklogs?month=2026-08');
+    assert.equal(r.status, 502);
+    assert.equal(r.body.status, 401);
+  } finally { unauthorized.close(); }
+  const timedOut = await startServer(async () => { throw new JiraError('Jira request timed out', 504); });
+  try {
+    assert.equal((await get('/api/worklogs?month=2026-08')).status, 504);
+  } finally { timedOut.close(); }
+});

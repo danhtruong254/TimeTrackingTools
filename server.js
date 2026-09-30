@@ -154,4 +154,67 @@ async function fetchMonth(jira, month, me) {
   return toEntries(issues, worklogsByIssue, me.accountId, month, me.timeZone);
 }
 
-module.exports = { normalizeStarted, localDate, monthRange, isPastMonth, toEntries, JiraError, retryDelayMs, createJira, mapLimit, fetchMonth };
+function createServer({ jira, baseUrl, port, now = () => new Date() }) {
+  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]); // blocks DNS rebinding
+  const cache = new Map(); // month -> response; past months only
+  let me;
+
+  async function getMe() {
+    if (!me) {
+      const user = await jira('/rest/api/3/myself');
+      if (!user.accountId) throw new JiraError('Jira /myself returned no accountId', 502);
+      if (!user.timeZone) console.warn('Jira profile has no timeZone; falling back to UTC');
+      me = { accountId: user.accountId, timeZone: user.timeZone || 'UTC' };
+    }
+    return me;
+  }
+
+  return http.createServer(async (req, res) => {
+    const json = (code, body) => {
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    if (!allowedHosts.has(req.headers.host)) return json(403, { error: 'Forbidden host' });
+
+    const url = new URL(req.url, 'http://localhost');
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(fs.readFileSync(path.join(__dirname, 'index.html')));
+    }
+    if (req.method !== 'GET' || url.pathname !== '/api/worklogs') return json(404, { error: 'Not found' });
+
+    const month = url.searchParams.get('month') || '';
+    if (!MONTH_RE.test(month)) return json(400, { error: 'month must be YYYY-MM' });
+
+    try {
+      const { accountId, timeZone } = await getMe();
+      const past = isPastMonth(month, timeZone, now());
+      if (past && url.searchParams.get('refresh') !== '1' && cache.has(month)) return json(200, cache.get(month));
+      const body = { baseUrl, timeZone, entries: await fetchMonth(jira, month, { accountId, timeZone }) };
+      if (past) cache.set(month, body);
+      json(200, body);
+    } catch (err) {
+      const status = err instanceof JiraError ? err.status : 500;
+      console.error(err.message);
+      json(status === 504 ? 504 : 502, { error: err.message, status });
+    }
+  });
+}
+
+module.exports = {
+  normalizeStarted, localDate, monthRange, isPastMonth, toEntries,
+  JiraError, retryDelayMs, createJira, mapLimit, fetchMonth, createServer,
+};
+
+if (require.main === module) {
+  const missing = ['JIRA_BASE_URL', 'JIRA_EMAIL', 'JIRA_API_TOKEN'].filter((k) => !process.env[k]);
+  if (missing.length) {
+    console.error(`Missing env var(s): ${missing.join(', ')}. Copy .env.example to .env and fill it in.`);
+    process.exit(1);
+  }
+  const baseUrl = process.env.JIRA_BASE_URL.replace(/\/+$/, '');
+  const jira = createJira({ baseUrl, email: process.env.JIRA_EMAIL, token: process.env.JIRA_API_TOKEN });
+  createServer({ jira, baseUrl, port: PORT }).listen(PORT, '127.0.0.1', () => {
+    console.log(`Jira time dashboard: http://localhost:${PORT}`);
+  });
+}
