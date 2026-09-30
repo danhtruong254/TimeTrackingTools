@@ -37,8 +37,8 @@ TimeTrackingTools/
 
 For each `/api/worklogs?month=YYYY-MM` request:
 
-0. If `month` is in the in-memory cache and `refresh=1` is not set, return the cached response.
-1. `GET /rest/api/3/myself` gives my `accountId` and `timeZone` (Jira profile timezone). Both are cached in memory for the process lifetime.
+0. If `month` is a past month (before the month containing today in the Jira profile timezone), is in the in-memory cache, and `refresh=1` is not set, return the cached response. The current month always goes to Jira.
+1. `GET /rest/api/3/myself` gives my `accountId` and `timeZone` (Jira profile timezone). Both are cached in memory for the process lifetime. If `timeZone` is missing, use `"UTC"` and log a warning to the server console.
 2. `POST /rest/api/3/search/jql` with JQL
    `worklogAuthor = currentUser() AND worklogDate >= "<monthStart - 1 day>" AND worklogDate <= "<monthEnd + 1 day>"`,
    `fields: ["summary", "project"]`. Follow `nextPageToken` until exhausted.
@@ -49,12 +49,14 @@ For each `/api/worklogs?month=YYYY-MM` request:
    - This range covers the whole month in any timezone within ±24h of UTC. It also stops long-lived tickets from returning their entire worklog history for every user.
 4. Pure function `toEntries(issues, worklogsByIssue, accountId, month, tz)` is the source of truth for filtering:
    - keep entries where `author.accountId === accountId`;
-   - derive the local date of `started` with `Intl.DateTimeFormat` using `timeZone: tz` (the Jira profile timezone, never the machine's), and keep only dates inside `month`;
+   - normalize the `started` offset before parsing. Jira returns offsets like `+0000` with no colon, which is not strict ISO 8601, so insert the colon with `s.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')`;
+   - derive the local date of `started` in `tz` (the Jira profile timezone, never the machine's). Take year, month and day from `Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts()`, and never rely on a locale's string output. Create one formatter per `tz` and reuse it, never one per worklog;
+   - keep only dates inside `month`;
    - map to `{ date, issueKey, summary, project: project.key, seconds: timeSpentSeconds }`;
    - sort by date.
-5. Build `{ baseUrl, timeZone, entries }`, store it in the cache under `month`, and respond with it as JSON.
+5. Build `{ baseUrl, timeZone, entries }`. If `month` is a past month, store the response in the cache under `month`. Respond with it as JSON.
 
-In-memory cache: `Map<month, response>` in the server process. It is lost on restart and is not persistent. A `refresh=1` request bypasses the cache and overwrites the stored entry. Failed requests are never cached.
+In-memory cache: `Map<month, response>` in the server process. It is lost on restart and is not persistent. Only past months are cached. The month containing today (in the Jira profile timezone) is never cached, because it still receives new worklogs. For past months, a `refresh=1` request bypasses the cache and overwrites the stored entry. Failed requests are never cached.
 
 Endpoint shapes are verified against current Jira Cloud REST v3 docs during planning.
 
@@ -66,6 +68,7 @@ Layout: calendar on the left, breakdown on the right, on one screen.
   `const TARGETS = { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 8, Sun: 8 };`
   A day's target is `TARGETS[weekday]`.
 - **Today:** the current date in the API's `timeZone`, derived with `Intl.DateTimeFormat`. The browser's timezone is not used.
+- **Date math:** every calculation on `YYYY-MM-DD` strings (weekday, days in month, adding or subtracting days, calendar grid layout, and the `TARGETS[weekday]` lookup) uses `Date.UTC(...)` with `getUTCDay()` / `getUTCDate()`, so it never depends on the browser timezone.
 - **Counted days:** days of the month up to and including yesterday that have a target > 0. For past months this is every such day in the month. Future months have none.
 - **Header:** month label with ◀ ▶ buttons, Refresh button (sends `refresh=1`), "Copy summary" button, and a summary strip:
   - Logged: sum of all entries in the month, today included.
@@ -85,12 +88,13 @@ Layout: calendar on the left, breakdown on the right, on one screen.
   - the month totals;
   - one line per day up to and including today, with its total (today marked "in progress");
   - the per-ticket totals.
-- **Durations:** all sums are done in seconds. Seconds are converted to text only at display time, by one shared function `fmt(seconds)` that returns strings such as `7h 45m`. The calendar, breakdown, summary strip and Copy summary all use `fmt`. Jira stores `timeSpentSeconds` in whole minutes, so a formatted total always equals the sum of its formatted lines.
+- **Durations:** all sums are done in seconds. Seconds are converted to text only at display time, by one shared function `fmt(seconds)` that returns strings such as `7h 45m`. The calendar, breakdown, summary strip and Copy summary all use `fmt`. `fmt` rounds to the nearest minute. Totals are computed from raw seconds, so a formatted total may differ from the sum of its formatted lines by at most one minute per line.
 - Changing month triggers a new fetch. Loading state shown while fetching.
 
 ## Error handling
 
 - Missing env var at startup: exit with a message naming the missing variable.
+- `/myself` returns no `timeZone`: fall back to `"UTC"` and log a warning to the server console.
 - Invalid `month` query param: 400. Valid means it matches `^\d{4}-(0[1-9]|1[0-2])$`.
 - Wrong `Host` header: 403.
 - Jira 401/403: API responds with `{ error, status }`; UI shows banner "Check JIRA_EMAIL / JIRA_API_TOKEN".
@@ -106,6 +110,7 @@ Layout: calendar on the left, breakdown on the right, on one screen.
 - drops worklogs by other authors;
 - drops worklogs whose local date falls outside the month (including the widened ±1 day);
 - timezone edge where the `started` offset differs from `tz`: `2026-09-30T23:30:00.000+0000` gives `2026-10-01` with `tz = "Asia/Ho_Chi_Minh"`, so it is excluded from month `2026-09` and included in `2026-10`. The same value gives `2026-09-30` with `tz = "UTC"`.
+- parses `started` in Jira's exact format, with no colon in the offset (`2026-09-30T23:30:00.000+0000`), to the correct date;
 - multiple worklogs on the same issue and day are all returned (summing is the UI's job).
 
 UI aggregation is small and checked manually in the browser. No UI test framework.
