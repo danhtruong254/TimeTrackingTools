@@ -82,7 +82,12 @@
   .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
   .btn-primary:hover { background: oklch(0.50 0.18 250); }
   .tz { display: flex; align-items: center; gap: 10px; color: var(--fg-muted); font-size: 13px; }
-  .tz select { height: 44px; padding: 0 12px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 14px; }
+  .select-wrap { position: relative; display: inline-flex; }
+  .select-wrap::after { content: ''; position: absolute; right: 14px; top: 50%; width: 12px; height: 12px; margin-top: -6px; background: var(--fg-muted); pointer-events: none;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") center / contain no-repeat; }
+  .tz select { appearance: none; -webkit-appearance: none; height: 44px; padding: 0 40px 0 14px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 14px; cursor: pointer; }
+  .tz select:hover { background: var(--bg-hover); }
   .status { font-size: 13px; color: var(--fg-muted); min-width: 60px; }
 
   .kpis { display: flex; flex-wrap: wrap; gap: 12px; }
@@ -175,10 +180,24 @@
   .entry-date { font-size: 12px; color: var(--fg-subtle); }
   .comment { font-size: 12.5px; color: var(--fg-muted); white-space: pre-line; }
   .empty { min-height: 220px; padding: 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; color: var(--fg-muted); border: 1px dashed var(--border-strong); border-radius: 10px; }
+  /* Loading: top progress bar, spinning refresh icon, dimmed content, skeleton on first load. */
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .topbar { position: fixed; top: 0; left: 0; right: 0; height: 3px; overflow: hidden; opacity: 0; transition: opacity 0.2s; z-index: 10; }
+  .topbar::before { content: ''; position: absolute; top: 0; bottom: 0; width: 35%; background: var(--accent); border-radius: 0 3px 3px 0; animation: slide 1.1s ease-in-out infinite; }
+  body.loading .topbar { opacity: 1; }
+  #refresh[aria-busy="true"] svg { animation: spin 0.8s linear infinite; }
+  main.busy { opacity: 0.55; transition: opacity 0.15s; }
+  .skel { display: block; border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--track) 25%, var(--bg-hover) 50%, var(--track) 75%); background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
+  .skel-day { height: 100px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid var(--border); border-radius: 10px; }
+  @keyframes slide { from { left: -35%; } to { left: 100%; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @media (prefers-reduced-motion: reduce) { .topbar::before, .skel, #refresh[aria-busy="true"] svg { animation: none; } .topbar::before { left: 0; width: 100%; } }
   .empty-title { font-size: 14px; font-weight: 600; color: var(--fg); }
 </style>
 </head>
 <body>
+<div class="topbar" aria-hidden="true"></div>
 <header class="top">
   <div class="controls">
     <div class="monthnav">
@@ -192,7 +211,7 @@
     <div class="vsep"></div>
     <button id="refresh" class="btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>Refresh</button>
     <button id="copy" class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy summary</button>
-    <label class="tz">Time zone <select id="tz"><option value="Asia/Ho_Chi_Minh">UTC+7 (local)</option><option value="">Jira profile</option></select></label>
+    <label class="tz">Time zone <span class="select-wrap"><select id="tz"><option value="Asia/Ho_Chi_Minh">UTC+7 (local)</option><option value="">Jira profile</option></select></span></label>
     <span id="status" class="status" aria-live="polite"></span>
   </div>
   <div id="kpis" class="kpis"></div>
@@ -416,20 +435,39 @@ function renderList(entries) {
   }).join('');
 }
 
+function renderSkeleton() {
+  const line = (w, h) => `<span class="skel" style="width:${w};height:${h}px"></span>`;
+  const card = (cls, w) => `<div class="kpi ${cls}" style="min-height:${cls ? 92 : 80}px">${line('50%', 12)}${line(w, 24)}</div>`; // same height as real cards
+  $('#kpis').innerHTML = card('kpi-wide', '45%') + card('', '70%') + card('', '40%') + card('', '60%');
+  $('#cal').innerHTML = Array.from({ length: 35 }, () => `<div class="skel-day" aria-hidden="true">${line('22px', 12)}${line('55%', 18)}</div>`).join('');
+  $('#side-title').innerHTML = line('180px', 22);
+  $('#side-sum').innerHTML = line('80px', 22);
+  $('#side-sub').textContent = '';
+  $('#list').innerHTML = Array.from({ length: 6 }, () => `<div class="row">${line('40%', 12)}${line('85%', 14)}${line('100%', 4)}</div>`).join('');
+}
+
 function render() {
   const month = state.pending || state.month || initialMonth;
   $('#month').textContent = month;
   $('#month-name').textContent = MONTH_NAME.format(new Date(toMs(`${month}-01`)));
   $('#status').textContent = state.loading ? 'Loading…' : '';
+  $('#status').classList.toggle('sr-only', state.loading); // announced, not shown: the loading UI shows it
+  document.body.classList.toggle('loading', state.loading);
+  $('#refresh').setAttribute('aria-busy', state.loading);
+  $('main').setAttribute('aria-busy', state.loading);
   $('#banner').textContent = state.error || '';
   $('#banner').style.display = state.error ? 'block' : 'none';
   for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-pressed', b.dataset.view === state.groupBy);
   if (!state.data) {
-    $('main').style.display = 'none';
-    $('#kpis').innerHTML = '';
+    // Skeleton only while the first load is in flight; after an error with no data, show nothing (never a fake empty calendar).
+    const skeleton = state.loading && !state.error;
+    $('main').style.display = skeleton ? '' : 'none';
+    if (skeleton) renderSkeleton();
+    else $('#kpis').innerHTML = '';
     return;
   }
   $('main').style.display = '';
+  $('main').classList.toggle('busy', state.loading);
   const v = compute(state.data, state.month);
 
   const pct = v.target ? Math.round((v.logged / v.target) * 100) : 0;
