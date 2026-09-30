@@ -152,6 +152,7 @@ async function load(month, refresh = false, initial = false) {
     if (!res.ok) {
       throw new Error(body.status === 401 || body.status === 403 ? 'Check JIRA_EMAIL / JIRA_API_TOKEN' : body.error || `HTTP ${res.status}`);
     }
+    if (!Array.isArray(body.entries)) throw new Error('Unexpected response from server');
     if (month !== state.month) state.selected = null;
     Object.assign(state, { month, data: body, pending: null, error: null });
     const real = todayIn(body.timeZone).slice(0, 7);

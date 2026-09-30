@@ -16,7 +16,7 @@ Scope: only my own worklogs (the API token owner). Target is a per-weekday map, 
 
 ```
 TimeTrackingTools/
-  server.js       Node 18+, built-in http + fetch, no npm dependencies
+  server.js       Node 20.6+ (for --env-file), built-in http + fetch, no npm dependencies
   index.html      UI: inline CSS + JS, no framework, no build step
   .env.example    JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN
   server.test.js  node:test tests for worklog filtering
