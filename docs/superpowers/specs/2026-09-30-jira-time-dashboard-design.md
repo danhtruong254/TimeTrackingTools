@@ -67,6 +67,7 @@ Layout: calendar on the left, breakdown on the right, on one screen.
 - **Config:** a per-weekday target map in hours, defined at the top of the `index.html` script:
   `const TARGETS = { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 8, Sun: 8 };`
   A day's target is `TARGETS[weekday]`.
+- **Timezone picker:** a header `<select>` chooses the timezone used to put worklogs on days: `UTC+7 (local)` (`Asia/Ho_Chi_Minh`, the default, set by `DEFAULT_TZ`) or the Jira profile timezone. The choice is kept in `localStorage`. A non-profile choice is sent as `&tz=<IANA name>`; the server validates it (400 if invalid), uses it instead of the profile timezone for filtering, `isPastMonth` and the cache key (`month|tz`), and returns it as `timeZone` alongside `profileTimeZone`.
 - **Today:** the current date in the API's `timeZone`, derived with `Intl.DateTimeFormat`. The browser's timezone is not used.
 - **Date math:** every calculation on `YYYY-MM-DD` strings (weekday, days in month, adding or subtracting days, calendar grid layout, and the `TARGETS[weekday]` lookup) uses `Date.UTC(...)` with `getUTCDay()` / `getUTCDate()`, so it never depends on the browser timezone.
 - **Counted days:** days of the month up to and including yesterday that have a target > 0. For past months this is every such day in the month. Future months have none.

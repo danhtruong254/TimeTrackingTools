@@ -49,6 +49,7 @@
   <button id="next" aria-label="Next month">▶</button>
   <button id="refresh">Refresh</button>
   <button id="copy">Copy summary</button>
+  <label>Time zone <select id="tz"><option value="Asia/Ho_Chi_Minh">UTC+7 (local)</option><option value="">Jira profile</option></select></label>
   <span id="status" class="muted" aria-live="polite"></span>
   <div id="kpis" class="kpis"></div>
 </header>
@@ -69,6 +70,8 @@
 <script>
 // Hours per weekday. 0 = day off (shown neutral, never counted as a gap).
 const TARGETS = { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 8, Sun: 8 };
+// Timezone used to put worklogs on days. '' = Jira profile timezone. The choice is remembered per browser.
+const DEFAULT_TZ = 'Asia/Ho_Chi_Minh';
 
 const STATUS_TEXT = { ok: 'target met', low: 'below target', zero: 'nothing logged', off: 'day off', today: 'in progress', future: 'future' };
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -98,9 +101,14 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const sum = (xs, f) => xs.reduce((s, x) => s + f(x), 0);
 const link = (key) => `<a href="${esc(state.data.baseUrl)}/browse/${esc(key)}" target="_blank" rel="noopener">${esc(key)}</a>`;
 
-// First month is guessed from the browser timezone; the first load re-loads once if Jira's timeZone says today is in another month.
+function savedTz() {
+  try { return localStorage.getItem('tz') ?? DEFAULT_TZ; } catch { return DEFAULT_TZ; }
+}
+let tzChoice = savedTz();
+
+// First month is guessed locally; the first load re-loads once if the server's timeZone says today is in another month.
 let seq = 0; // request token: only the latest load may touch state
-const initialMonth = todayIn(Intl.DateTimeFormat().resolvedOptions().timeZone).slice(0, 7);
+const initialMonth = todayIn(tzChoice || Intl.DateTimeFormat().resolvedOptions().timeZone).slice(0, 7);
 const state = { month: null, data: null, selected: null, groupBy: 'ticket', loading: false, error: null, pending: null };
 
 function compute(data, month) {
@@ -146,7 +154,8 @@ async function load(month, refresh = false, initial = false) {
   state.loading = true;
   render();
   try {
-    const res = await fetch(`/api/worklogs?month=${month}${refresh ? '&refresh=1' : ''}`);
+    const tz = tzChoice ? `&tz=${encodeURIComponent(tzChoice)}` : '';
+    const res = await fetch(`/api/worklogs?month=${month}${refresh ? '&refresh=1' : ''}${tz}`);
     const body = (await res.json().catch(() => null)) || {};
     if (id !== seq) return;
     if (!res.ok) {
@@ -155,6 +164,7 @@ async function load(month, refresh = false, initial = false) {
     if (!Array.isArray(body.entries)) throw new Error('Unexpected response from server');
     if (month !== state.month) state.selected = null;
     Object.assign(state, { month, data: body, pending: null, error: null });
+    $('#tz option[value=""]').textContent = `Jira profile (${body.profileTimeZone})`;
     const real = todayIn(body.timeZone).slice(0, 7);
     if (initial && real !== month) return load(real);
   } catch (err) {
@@ -216,7 +226,7 @@ async function copySummary() {
   if (!state.data) return;
   const v = compute(state.data, state.month);
   const lines = [
-    `Jira time — ${state.month}`,
+    `Jira time — ${state.month} (${state.data.timeZone})`,
     `Logged ${fmt(v.logged)} · Target ${fmt(v.target)} · Gap days ${v.gapDays} · Missing ${fmt(v.missing)}`,
     '',
     ...v.days.filter((d) => d.status !== 'future')
@@ -238,6 +248,12 @@ $('#prev').onclick = () => load(shiftMonth(state.pending || state.month || initi
 $('#next').onclick = () => load(shiftMonth(state.pending || state.month || initialMonth, 1));
 $('#refresh').onclick = () => load(state.pending || state.month || initialMonth, true);
 $('#copy').onclick = copySummary;
+$('#tz').value = tzChoice;
+$('#tz').onchange = (e) => {
+  tzChoice = e.target.value;
+  try { localStorage.setItem('tz', tzChoice); } catch {}
+  load(state.pending || state.month || initialMonth);
+};
 $('#by-ticket').onclick = () => { state.groupBy = 'ticket'; render(); };
 $('#by-project').onclick = () => { state.groupBy = 'project'; render(); };
 $('#cal').onclick = (e) => {

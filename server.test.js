@@ -233,7 +233,7 @@ test('server caches past months only; refresh=1 bypasses', async () => {
   const server = await startServer(jira);
   try {
     const first = await get('/api/worklogs?month=2026-08');
-    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', entries: [] });
+    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', entries: [] });
     await get('/api/worklogs?month=2026-08');
     assert.equal(jira.searches, 1);
     await get('/api/worklogs?month=2026-08&refresh=1');
@@ -282,5 +282,21 @@ test('server survives a malformed request target', async () => {
     });
     assert.match(raw, /^HTTP\/1\.1 500/);
     assert.equal((await get('/api/worklogs?month=2026-13')).status, 400);
+  } finally { server.close(); }
+});
+
+test('server uses the tz query param instead of the profile timezone', async () => {
+  const jira = fakeJira();
+  const server = await startServer(jira);
+  try {
+    const r = await get('/api/worklogs?month=2026-08&tz=Asia/Ho_Chi_Minh');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.timeZone, 'Asia/Ho_Chi_Minh');
+    assert.equal(r.body.profileTimeZone, 'UTC');
+    assert.equal((await get('/api/worklogs?month=2026-08')).body.timeZone, 'UTC');
+    assert.equal(jira.searches, 2); // cached per month and timezone
+    await get('/api/worklogs?month=2026-08&tz=Asia/Ho_Chi_Minh');
+    assert.equal(jira.searches, 2);
+    assert.equal((await get('/api/worklogs?month=2026-08&tz=Not/AZone')).status, 400);
   } finally { server.close(); }
 });

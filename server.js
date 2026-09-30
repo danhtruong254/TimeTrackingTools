@@ -45,6 +45,15 @@ function monthRange(month) {
   };
 }
 
+function isValidTimeZone(tz) {
+  try {
+    dateFormatter(tz);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isPastMonth(month, tz, now) {
   return month < localDate(now, tz).slice(0, 7);
 }
@@ -156,7 +165,7 @@ async function fetchMonth(jira, month, me) {
 
 function createServer({ jira, baseUrl, port, now = () => new Date() }) {
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]); // blocks DNS rebinding
-  const cache = new Map(); // month -> response; past months only
+  const cache = new Map(); // `${month}|${tz}` -> response; past months only
   let me;
 
   async function getMe() {
@@ -188,11 +197,16 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
       const month = url.searchParams.get('month') || '';
       if (!MONTH_RE.test(month)) return json(400, { error: 'month must be YYYY-MM' });
 
-      const { accountId, timeZone } = await getMe();
+      const tzParam = url.searchParams.get('tz');
+      if (tzParam && !isValidTimeZone(tzParam)) return json(400, { error: 'tz must be an IANA timezone' });
+
+      const { accountId, timeZone: profileTimeZone } = await getMe();
+      const timeZone = tzParam || profileTimeZone;
+      const key = `${month}|${timeZone}`;
       const past = isPastMonth(month, timeZone, now());
-      if (past && url.searchParams.get('refresh') !== '1' && cache.has(month)) return json(200, cache.get(month));
-      const body = { baseUrl, timeZone, entries: await fetchMonth(jira, month, { accountId, timeZone }) };
-      if (past) cache.set(month, body);
+      if (past && url.searchParams.get('refresh') !== '1' && cache.has(key)) return json(200, cache.get(key));
+      const body = { baseUrl, timeZone, profileTimeZone, entries: await fetchMonth(jira, month, { accountId, timeZone }) };
+      if (past) cache.set(key, body);
       json(200, body);
     } catch (err) {
       console.error(err.message);
