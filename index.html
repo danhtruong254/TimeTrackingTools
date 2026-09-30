@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jira Time</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --ok: #2e7d32; --low: #f9a825; --zero: #c62828; --accent: #1976d2; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1c1e; --fg: #f2f2f7; --muted: #98989d; --line: #3a3a3c; } }
+  body { margin: 0; padding: 16px; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  header h1 { font-size: 18px; margin: 0 4px; min-width: 80px; text-align: center; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+  button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .muted { color: var(--muted); }
+  .kpis { display: flex; gap: 16px; margin-left: auto; }
+  .kpis div { color: var(--muted); font-size: 12px; }
+  .kpis b { display: block; color: var(--fg); font-size: 16px; }
+  #banner { display: none; padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--zero); border-radius: 6px; color: var(--zero); }
+  main { display: grid; grid-template-columns: 3fr 2fr; gap: 24px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .dow { font-size: 12px; color: var(--muted); text-align: center; }
+  .day { min-height: 52px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+  .day .n { font-size: 12px; color: var(--muted); }
+  .day .h { font-weight: 600; }
+  .day.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); border-color: var(--ok); }
+  .day.low { background: color-mix(in srgb, var(--low) 22%, transparent); border-color: var(--low); }
+  .day.zero { background: color-mix(in srgb, var(--zero) 18%, transparent); border-color: var(--zero); }
+  .day.today { border: 2px dashed var(--accent); }
+  .day.future { opacity: .4; cursor: default; }
+  .day.sel { outline: 2px solid var(--fg); outline-offset: 1px; }
+  .bd-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .bd-head h2 { font-size: 16px; margin: 0; }
+  .bars { margin-top: 12px; }
+  .bars .row { margin-bottom: 10px; }
+  .bars .label { display: flex; justify-content: space-between; gap: 8px; }
+  .bars .bar { height: 8px; margin-top: 3px; background: var(--accent); border-radius: 4px; }
+  a { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  td.num { text-align: right; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <button id="prev" aria-label="Previous month">◀</button>
+  <h1 id="month"></h1>
+  <button id="next" aria-label="Next month">▶</button>
+  <button id="refresh">Refresh</button>
+  <button id="copy">Copy summary</button>
+  <span id="status" class="muted"></span>
+  <div id="kpis" class="kpis"></div>
+</header>
+<div id="banner" role="alert"></div>
+<main>
+  <section>
+    <div id="cal" class="cal"></div>
+    <div id="detail"></div>
+  </section>
+  <section>
+    <div class="bd-head">
+      <h2 id="breakdown-title"></h2>
+      <span><button id="by-ticket">Ticket</button> <button id="by-project">Project</button></span>
+    </div>
+    <div id="bars" class="bars"></div>
+  </section>
+</main>
+<script>
+// Hours per weekday. 0 = day off (shown neutral, never counted as a gap).
+const TARGETS = { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 8, Sun: 8 };
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const $ = (sel) => document.querySelector(sel);
+
+// Date math on YYYY-MM-DD strings, always via UTC so the browser timezone never matters.
+const toMs = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+const weekday = (s) => WEEKDAYS[new Date(toMs(s)).getUTCDay()];
+const daysInMonth = (month) => { const [y, m] = month.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); };
+const shiftMonth = (month, n) => { const [y, m] = month.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7); };
+function todayIn(tz) {
+  const p = {};
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+  for (const { type, value } of f.formatToParts(new Date())) p[type] = value;
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+// The only seconds-to-text function. Rounds to the nearest minute.
+function fmt(sec) {
+  const mins = Math.round(sec / 60);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h && m ? `${h}h ${m}m` : m ? `${m}m` : `${h}h`;
+}
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const sum = (xs, f) => xs.reduce((s, x) => s + f(x), 0);
+const link = (key) => `<a href="${esc(state.data.baseUrl)}/browse/${esc(key)}" target="_blank" rel="noopener">${esc(key)}</a>`;
+
+// ponytail: the first month is guessed from the browser timezone before Jira's timeZone is known; ◀ ▶ corrects it.
+const initialMonth = todayIn(Intl.DateTimeFormat().resolvedOptions().timeZone).slice(0, 7);
+const state = { month: null, data: null, selected: null, groupBy: 'ticket', loading: false, error: null };
+
+function compute(data, month) {
+  const today = todayIn(data.timeZone);
+  const byDay = {};
+  for (const e of data.entries) byDay[e.date] = (byDay[e.date] || 0) + e.seconds;
+  const days = [];
+  for (let d = 1; d <= daysInMonth(month); d++) {
+    const date = `${month}-${String(d).padStart(2, '0')}`;
+    const logged = byDay[date] || 0;
+    const target = TARGETS[weekday(date)] * 3600;
+    let status;
+    if (date > today) status = 'future';
+    else if (date === today) status = 'today';
+    else if (target === 0) status = 'off';
+    else status = logged >= target ? 'ok' : logged > 0 ? 'low' : 'zero';
+    days.push({ date, logged, target, status });
+  }
+  const counted = days.filter((d) => d.status === 'ok' || d.status === 'low' || d.status === 'zero');
+  return {
+    days,
+    logged: sum(data.entries, (e) => e.seconds),
+    target: sum(counted, (d) => d.target),
+    gapDays: counted.filter((d) => d.logged < d.target).length,
+    missing: sum(counted, (d) => Math.max(0, d.target - d.logged)),
+  };
+}
+
+function groupTotals(entries, by) {
+  const groups = new Map();
+  for (const e of entries) {
+    const key = by === 'ticket' ? e.issueKey : e.project;
+    const g = groups.get(key) || { key, summary: by === 'ticket' ? e.summary : '', seconds: 0 };
+    g.seconds += e.seconds;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.seconds - a.seconds);
+}
+
+async function load(month, refresh = false) {
+  state.loading = true;
+  render();
+  try {
+    const res = await fetch(`/api/worklogs?month=${month}${refresh ? '&refresh=1' : ''}`);
+    const body = await res.json();
+    if (!res.ok) {
+      throw new Error(body.status === 401 || body.status === 403 ? 'Check JIRA_EMAIL / JIRA_API_TOKEN' : body.error || `HTTP ${res.status}`);
+    }
+    Object.assign(state, { month, data: body, selected: null, error: null });
+  } catch (err) {
+    state.error = err.message; // keep the last good data: an empty calendar would look like real gaps
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+function render() {
+  $('#month').textContent = state.month || initialMonth;
+  $('#status').textContent = state.loading ? 'Loading…' : '';
+  $('#banner').textContent = state.error || '';
+  $('#banner').style.display = state.error ? 'block' : 'none';
+  $('#by-ticket').setAttribute('aria-pressed', state.groupBy === 'ticket');
+  $('#by-project').setAttribute('aria-pressed', state.groupBy === 'project');
+  if (!state.data) {
+    $('main').style.display = 'none';
+    $('#kpis').innerHTML = '';
+    return;
+  }
+  $('main').style.display = '';
+  const v = compute(state.data, state.month);
+
+  $('#kpis').innerHTML = [['Logged', fmt(v.logged)], ['Target', fmt(v.target)], ['Gap days', v.gapDays], ['Missing', fmt(v.missing)]]
+    .map(([k, x]) => `<div>${k}<b>${x}</b></div>`).join('');
+
+  const lead = (new Date(toMs(`${state.month}-01`)).getUTCDay() + 6) % 7; // Monday-first
+  $('#cal').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="dow">${d}</div>`).join('')
+    + '<div></div>'.repeat(lead)
+    + v.days.map((d) => `<div class="day ${d.status}${d.date === state.selected ? ' sel' : ''}" data-date="${d.date}"${d.status === 'today' ? ' title="In progress"' : ''}>
+        <div class="n">${Number(d.date.slice(8))}</div>${d.status === 'future' ? '' : `<div class="h">${fmt(d.logged)}</div>`}</div>`).join('');
+
+  const entries = state.data.entries.filter((e) => !state.selected || e.date === state.selected);
+  const rows = groupTotals(entries, state.groupBy);
+  const max = rows[0]?.seconds || 1;
+  $('#breakdown-title').textContent = `Breakdown · ${state.selected || state.month}`;
+  $('#bars').innerHTML = rows.length
+    ? rows.map((r) => `<div class="row"><div class="label"><span>${state.groupBy === 'ticket' ? `${link(r.key)} ${esc(r.summary)}` : esc(r.key)}</span><span>${fmt(r.seconds)}</span></div>
+        <div class="bar" style="width:${(r.seconds / max) * 100}%"></div></div>`).join('')
+    : '<p class="muted">No worklogs.</p>';
+
+  if (!state.selected) {
+    $('#detail').innerHTML = '';
+  } else {
+    const dayRows = state.data.entries.filter((e) => e.date === state.selected);
+    $('#detail').innerHTML = `<h3>${state.selected} ${weekday(state.selected)}</h3>` + (dayRows.length
+      ? `<table>${dayRows.map((e) => `<tr><td>${link(e.issueKey)}</td><td>${esc(e.summary)}</td><td class="num">${fmt(e.seconds)}</td></tr>`).join('')}</table>`
+      : '<p class="muted">Nothing logged.</p>');
+  }
+}
+
+async function copySummary() {
+  if (!state.data) return;
+  const v = compute(state.data, state.month);
+  const lines = [
+    `Jira time — ${state.month}`,
+    `Logged ${fmt(v.logged)} · Target ${fmt(v.target)} · Gap days ${v.gapDays} · Missing ${fmt(v.missing)}`,
+    '',
+    ...v.days.filter((d) => d.status !== 'future')
+      .map((d) => `${d.date} ${weekday(d.date)}  ${fmt(d.logged)}${d.status === 'today' ? ' (in progress)' : ''}`),
+    '',
+    'By ticket',
+    ...groupTotals(state.data.entries, 'ticket').map((g) => `${g.key}  ${fmt(g.seconds)}  ${g.summary}`),
+  ];
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'));
+    $('#status').textContent = 'Copied';
+  } catch (err) {
+    state.error = `Copy failed: ${err.message}`;
+    render();
+  }
+}
+
+$('#prev').onclick = () => load(shiftMonth(state.month || initialMonth, -1));
+$('#next').onclick = () => load(shiftMonth(state.month || initialMonth, 1));
+$('#refresh').onclick = () => load(state.month || initialMonth, true);
+$('#copy').onclick = copySummary;
+$('#by-ticket').onclick = () => { state.groupBy = 'ticket'; render(); };
+$('#by-project').onclick = () => { state.groupBy = 'project'; render(); };
+$('#cal').onclick = (e) => {
+  const el = e.target.closest('.day');
+  if (!el || el.classList.contains('future')) return;
+  state.selected = state.selected === el.dataset.date ? null : el.dataset.date;
+  render();
+};
+
+load(initialMonth);
+</script>
+</body>
+</html>
