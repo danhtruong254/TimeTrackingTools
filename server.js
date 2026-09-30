@@ -176,17 +176,17 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
     };
     if (!allowedHosts.has(req.headers.host)) return json(403, { error: 'Forbidden host' });
 
-    const url = new URL(req.url, 'http://localhost');
-    if (req.method === 'GET' && url.pathname === '/') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(fs.readFileSync(path.join(__dirname, 'index.html')));
-    }
-    if (req.method !== 'GET' || url.pathname !== '/api/worklogs') return json(404, { error: 'Not found' });
-
-    const month = url.searchParams.get('month') || '';
-    if (!MONTH_RE.test(month)) return json(400, { error: 'month must be YYYY-MM' });
-
     try {
+      const url = new URL(req.url, 'http://localhost');
+      if (req.method === 'GET' && url.pathname === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(fs.readFileSync(path.join(__dirname, 'index.html')));
+      }
+      if (req.method !== 'GET' || url.pathname !== '/api/worklogs') return json(404, { error: 'Not found' });
+
+      const month = url.searchParams.get('month') || '';
+      if (!MONTH_RE.test(month)) return json(400, { error: 'month must be YYYY-MM' });
+
       const { accountId, timeZone } = await getMe();
       const past = isPastMonth(month, timeZone, now());
       if (past && url.searchParams.get('refresh') !== '1' && cache.has(month)) return json(200, cache.get(month));
@@ -194,9 +194,10 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
       if (past) cache.set(month, body);
       json(200, body);
     } catch (err) {
-      const status = err instanceof JiraError ? err.status : 500;
       console.error(err.message);
-      json(status === 504 ? 504 : 502, { error: err.message, status });
+      if (res.headersSent) return res.end();
+      if (err instanceof JiraError) return json(err.status === 504 ? 504 : 502, { error: err.message, status: err.status });
+      json(500, { error: err.message, status: 500 });
     }
   });
 }

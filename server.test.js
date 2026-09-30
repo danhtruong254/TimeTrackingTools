@@ -270,3 +270,17 @@ test('server maps Jira errors to 502/504 with the Jira status', async () => {
     assert.equal((await get('/api/worklogs?month=2026-08')).status, 504);
   } finally { timedOut.close(); }
 });
+
+const net = require('node:net');
+test('server survives a malformed request target', async () => {
+  const server = await startServer(fakeJira());
+  try {
+    const raw = await new Promise((resolve, reject) => {
+      const s = net.connect(TEST_PORT, '127.0.0.1', () => s.end(`GET http://[ HTTP/1.1\r\nHost: 127.0.0.1:${TEST_PORT}\r\nConnection: close\r\n\r\n`));
+      let buf = '';
+      s.on('data', (c) => { buf += c; }).on('end', () => resolve(buf)).on('error', reject);
+    });
+    assert.match(raw, /^HTTP\/1\.1 500/);
+    assert.equal((await get('/api/worklogs?month=2026-13')).status, 400);
+  } finally { server.close(); }
+});
