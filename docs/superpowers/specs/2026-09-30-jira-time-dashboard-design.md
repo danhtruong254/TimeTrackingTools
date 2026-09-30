@@ -43,7 +43,7 @@ For each `/api/worklogs?month=YYYY-MM` request:
    `worklogAuthor = currentUser() AND worklogDate >= "<monthStart - 1 day>" AND worklogDate <= "<monthEnd + 1 day>"`,
    `fields: ["summary", "project"]`. Follow `nextPageToken` until exhausted.
    The range is widened by one day on each side as a safety margin; exact filtering happens in step 4.
-3. For each issue, call `GET /rest/api/3/issue/{key}/worklog?startedAfter=<ms>&startedBefore=<ms>`, following `startAt`/`total` paging, with at most 5 requests in flight.
+3. The search also requests the `worklog` field, which embeds each issue's worklogs (Jira caps it at about 20). When `worklog.total <= worklogs.length` those are used as-is, with no extra request. Otherwise, call `GET /rest/api/3/issue/{key}/worklog?startedAfter=<ms>&startedBefore=<ms>`, following `startAt`/`total` paging, with at most 5 requests in flight.
    - `startedAfter` is 00:00 UTC on `monthStart − 1 day`, in epoch ms.
    - `startedBefore` is 00:00 UTC on `monthEnd + 2 days`, in epoch ms. That instant is the end of `monthEnd + 1 day`.
    - This range covers the whole month in any timezone within ±24h of UTC. It also stops long-lived tickets from returning their entire worklog history for every user.

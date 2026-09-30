@@ -151,14 +151,17 @@ async function fetchMonth(jira, month, person) {
   do {
     const page = await jira('/rest/api/3/search/jql', {
       method: 'POST',
-      body: JSON.stringify({ jql, fields: ['summary', 'project'], maxResults: 100, nextPageToken }),
+      body: JSON.stringify({ jql, fields: ['summary', 'project', 'worklog'], maxResults: 100, nextPageToken }),
     });
     issues.push(...page.issues);
     nextPageToken = page.nextPageToken;
   } while (nextPageToken);
 
+  // Search results embed each issue's worklogs (Jira caps them, ~20). Only issues with more are fetched one by one.
   // Any failed issue rejects the whole month: partial data would show fake gaps.
   const lists = await mapLimit(issues, CONCURRENCY, async (issue) => {
+    const embedded = issue.fields.worklog;
+    if (embedded && embedded.total <= embedded.worklogs.length) return embedded.worklogs;
     const all = [];
     let startAt = 0;
     for (;;) {

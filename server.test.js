@@ -174,7 +174,7 @@ test('fetchMonth pages search and worklogs, narrows by started, then filters', a
     ['2026-09-02', 'OPS-2', 1800],
   ]);
   assert.equal(calls[0].body.jql, 'worklogAuthor = "me-123" AND worklogDate >= "2026-08-31" AND worklogDate <= "2026-10-01"');
-  assert.deepEqual(calls[0].body.fields, ['summary', 'project']);
+  assert.deepEqual(calls[0].body.fields, ['summary', 'project', 'worklog']);
   const q = new URL(calls.find((c) => c.p.startsWith('/rest/api/3/issue/EF-1/worklog')).p, 'http://x').searchParams;
   assert.equal(q.get('startedAfter'), String(Date.UTC(2026, 7, 31)));
   assert.equal(q.get('startedBefore'), String(Date.UTC(2026, 9, 2)));
@@ -357,4 +357,23 @@ test('server searches active human users', async () => {
     assert.equal((await get('/api/users?q=')).status, 400);
     assert.equal((await get('/api/users')).status, 400);
   } finally { server.close(); }
+});
+
+test('fetchMonth uses worklogs embedded in search results and only fetches issues with more', async () => {
+  const embedded = (worklogs, total = worklogs.length) => ({ startAt: 0, maxResults: 20, total, worklogs });
+  const calls = [];
+  const jira = async (p) => {
+    calls.push(p);
+    if (p === '/rest/api/3/search/jql') {
+      return { issues: [
+        { key: 'EF-1', fields: { ...issues[0].fields, worklog: embedded([wl(ME, '2026-09-01T09:00:00.000+0000', 3600)]) } },
+        { key: 'OPS-2', fields: { ...issues[1].fields, worklog: embedded([wl(ME, '2026-09-02T09:00:00.000+0000', 60)], 21) } },
+      ] };
+    }
+    if (p.startsWith('/rest/api/3/issue/OPS-2/worklog')) return { startAt: 0, total: 1, worklogs: [wl(ME, '2026-09-02T09:00:00.000+0000', 1800)] };
+    throw new Error(`unexpected ${p}`);
+  };
+  const entries = await fetchMonth(jira, '2026-09', { accountId: ME, timeZone: 'UTC' });
+  assert.deepEqual(entries.map((e) => [e.date, e.issueKey, e.seconds]), [['2026-09-01', 'EF-1', 3600], ['2026-09-02', 'OPS-2', 1800]]);
+  assert.equal(calls.filter((c) => c.includes('/worklog')).length, 1); // EF-1 complete in search; OPS-2 had 21 > 1 shown
 });
