@@ -1,0 +1,31 @@
+server.test.js
+  s_94c5a9e22619ae::t_047ce369cd99f3 287-302
+  s_94c5a9e22619ae::t_e3253e13e91423 236
+server.js
+  s_94c5a9e22619ae::t_850fbc2d32773c 48-56,168,200-205,207-209
+index.html
+  s_94c5a9e22619ae::t_dd71a50dd17998 52,73-74,104-109,111,157-158,167,229,251-256
+docs/superpowers/specs/2026-09-30-jira-time-dashboard-design.md
+  s_94c5a9e22619ae::t_be9ae0fc14309a 70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "454c3968b2d85df09085a06f5d6777cd92a88e85",
+  "prompts": {},
+  "humans": {
+    "h_ed86a358b699c2": {
+      "author": "danhtruong254 <danhtruong@everfit.io>"
+    }
+  },
+  "sessions": {
+    "s_94c5a9e22619ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27c9879b-63a0-4787-bb09-2e7862204e67",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "danhtruong254 <danhtruong@everfit.io>"
+    }
+  }
+}
