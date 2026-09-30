@@ -92,6 +92,15 @@ Layout: calendar on the left, breakdown on the right, on one screen.
 - **Durations:** all sums are done in seconds. Seconds are converted to text only at display time, by one shared function `fmt(seconds)` that returns strings such as `7h 45m`. The calendar, breakdown, summary strip and Copy summary all use `fmt`. `fmt` rounds to the nearest minute. Totals are computed from raw seconds, so a formatted total may differ from the sum of its formatted lines by at most one minute per line.
 - Changing month triggers a new fetch. Loading state shown while fetching.
 
+### Visual design (2026-09-30 redesign)
+
+Ported from the `Main.dc.html` design canvas and `tokens.json`; display only, the data logic above is unchanged.
+
+- Theme: CSS variables from `tokens.json` (light default, dark via `prefers-color-scheme`); green/amber/red/track state colors from the design.
+- Header: month name + mono `YYYY-MM`, icon buttons, KPI cards (Logged with % of target bar, Target, Gap days in amber, Missing in a red card).
+- Day cell: tinted by tone — green ≥ target, amber partial, red a workday with 0h; Sat/Sun or a target-0 day with 0h shows "—" neutral (display only: KPIs still count them per `TARGETS`). 4px progress bar vs the day's target, "+Xh Ym" when over, "Today" chip + accent ring; selected day gets a 2px accent ring. Legend under the grid.
+- Right panel: day or month title with total and "N entries · M tickets", segmented tabs By ticket / By project / Entries. `[..]` summary prefixes render as chips. Entries (with comments) replaces the old bottom day-detail list and shows each entry's date when no day is selected. Empty state: dashed box with a clock icon.
+
 ## Error handling
 
 - Missing env var at startup: exit with a message naming the missing variable.
