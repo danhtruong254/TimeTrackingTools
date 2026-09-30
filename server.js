@@ -58,6 +58,16 @@ function isPastMonth(month, tz, now) {
   return month < localDate(now, tz).slice(0, 7);
 }
 
+// Worklog comments come as Atlassian Document Format; flatten to plain text (blocks on separate lines).
+function adfText(node) {
+  if (!node) return '';
+  if (node.type === 'text') return node.text || '';
+  if (node.type === 'hardBreak') return '\n';
+  if (!node.content) return node.attrs?.text || ''; // mention, emoji, etc.
+  const parts = node.content.map(adfText);
+  return (node.type === 'paragraph' || node.type === 'heading' ? parts.join('') : parts.filter(Boolean).join('\n')).trim();
+}
+
 // Source of truth for filtering: my worklogs whose local date (in tz) is inside month.
 function toEntries(issues, worklogsByIssue, accountId, month, tz) {
   const entries = [];
@@ -72,6 +82,7 @@ function toEntries(issues, worklogsByIssue, accountId, month, tz) {
         summary: issue.fields.summary,
         project: issue.fields.project.key,
         seconds: w.timeSpentSeconds,
+        comment: adfText(w.comment),
       });
     }
   }
@@ -218,7 +229,7 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
 }
 
 module.exports = {
-  normalizeStarted, localDate, monthRange, isPastMonth, toEntries,
+  normalizeStarted, localDate, monthRange, isPastMonth, adfText, toEntries,
   JiraError, retryDelayMs, createJira, mapLimit, fetchMonth, createServer,
 };
 

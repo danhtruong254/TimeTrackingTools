@@ -50,7 +50,7 @@ test('toEntries drops worklogs by other authors', () => {
   const out = toEntries(issues, {
     'EF-1': [wl(ME, '2026-09-10T09:00:00.000+0700', 3600), wl('other', '2026-09-10T09:00:00.000+0700', 7200)],
   }, ME, '2026-09', 'Asia/Ho_Chi_Minh');
-  assert.deepEqual(out, [{ date: '2026-09-10', issueKey: 'EF-1', summary: 'Login bug', project: 'EF', seconds: 3600 }]);
+  assert.deepEqual(out, [{ date: '2026-09-10', issueKey: 'EF-1', summary: 'Login bug', project: 'EF', seconds: 3600, comment: '' }]);
 });
 
 test('toEntries drops dates outside the month, including the widened days', () => {
@@ -299,4 +299,23 @@ test('server uses the tz query param instead of the profile timezone', async () 
     assert.equal(jira.searches, 2);
     assert.equal((await get('/api/worklogs?month=2026-08&tz=Not/AZone')).status, 400);
   } finally { server.close(); }
+});
+
+const { adfText } = require('./server');
+
+test('adfText flattens Jira ADF comments to plain text', () => {
+  assert.equal(adfText(undefined), '');
+  assert.equal(adfText({
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Fixed ' }, { type: 'text', text: 'login', marks: [{ type: 'strong' }] }, { type: 'hardBreak' }, { type: 'text', text: 'with ' }, { type: 'mention', attrs: { text: '@Thuy' } }] },
+      { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'item' }] }] }] },
+      { type: 'paragraph', content: [] },
+    ],
+  }), 'Fixed login\nwith @Thuy\nitem');
+});
+
+test('toEntries includes the worklog comment as plain text', () => {
+  const w = { ...wl(ME, '2026-09-10T09:00:00.000+0000', 60), comment: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Reviewed PR' }] }] } };
+  assert.equal(toEntries(issues, { 'EF-1': [w] }, ME, '2026-09', 'UTC')[0].comment, 'Reviewed PR');
 });

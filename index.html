@@ -39,6 +39,7 @@
   a { color: var(--accent); }
   table { width: 100%; border-collapse: collapse; }
   td { padding: 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  .comment { margin-top: 2px; color: var(--muted); font-size: 12px; white-space: pre-line; }
   td.num { text-align: right; white-space: nowrap; }
 </style>
 </head>
@@ -217,7 +218,7 @@ function render() {
   } else {
     const dayRows = state.data.entries.filter((e) => e.date === state.selected);
     $('#detail').innerHTML = `<h3>${state.selected} ${weekday(state.selected)}</h3>` + (dayRows.length
-      ? `<table>${dayRows.map((e) => `<tr><td>${link(e.issueKey)}</td><td>${esc(e.summary)}</td><td class="num">${fmt(e.seconds)}</td></tr>`).join('')}</table>`
+      ? `<table>${dayRows.map((e) => `<tr><td>${link(e.issueKey)}</td><td>${esc(e.summary)}${e.comment ? `<div class="comment">${esc(e.comment)}</div>` : ''}</td><td class="num">${fmt(e.seconds)}</td></tr>`).join('')}</table>`
       : '<p class="muted">Nothing logged.</p>');
   }
 }

@@ -52,7 +52,7 @@ For each `/api/worklogs?month=YYYY-MM` request:
    - normalize the `started` offset before parsing. Jira returns offsets like `+0000` with no colon, which is not strict ISO 8601, so insert the colon with `s.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')`;
    - derive the local date of `started` in `tz` (the Jira profile timezone, never the machine's). Take year, month and day from `Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts()`, and never rely on a locale's string output. Create one formatter per `tz` and reuse it, never one per worklog;
    - keep only dates inside `month`;
-   - map to `{ date, issueKey, summary, project: project.key, seconds: timeSpentSeconds }`;
+   - map to `{ date, issueKey, summary, project: project.key, seconds: timeSpentSeconds, comment }`, where `comment` is the worklog's ADF comment flattened to plain text (`adfText`, blocks on separate lines, `''` when empty);
    - sort by date.
 5. Build `{ baseUrl, timeZone, entries }`. If `month` is a past month, store the response in the cache under `month`. Respond with it as JSON.
 
@@ -84,7 +84,7 @@ Layout: calendar on the left, breakdown on the right, on one screen.
   - in progress: today (distinct style; excluded from gap days and missing; its hours count toward Logged)
   - grey: future day
 - **Breakdown panel:** horizontal bars sorted by hours, descending. Toggle between **Ticket** and **Project** grouping. Ticket keys link to `<baseUrl>/browse/<key>`.
-- **Day selection:** clicking a day filters the breakdown to that day. A day-detail list (ticket, summary, hours) appears below the calendar. Clicking the selected day again clears the filter.
+- **Day selection:** clicking a day filters the breakdown to that day. A day-detail list (ticket, summary with the worklog comment underneath, hours) appears below the calendar. Clicking the selected day again clears the filter.
 - **Copy summary:** writes plain text to the clipboard. The text contains:
   - the month totals;
   - one line per day up to and including today, with its total (today marked "in progress");
