@@ -1,0 +1,21 @@
+.gitignore
+  s_94c5a9e22619ae::t_8e163357d8dde4 1-3
+docs/superpowers/specs/2026-09-30-jira-time-dashboard-design.md
+  s_94c5a9e22619ae::t_ab6192b70778e8 1-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "baf6d76fef6d58c61c3051e97e9d40b9a029d0bf",
+  "prompts": {},
+  "sessions": {
+    "s_94c5a9e22619ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27c9879b-63a0-4787-bb09-2e7862204e67",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "danhtruong254 <danhtruong@everfit.io>"
+    }
+  }
+}
