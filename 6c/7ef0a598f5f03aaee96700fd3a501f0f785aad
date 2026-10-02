@@ -1,0 +1,37 @@
+server.js
+  s_94c5a9e22619ae::t_c321e07efd30ba 7-11,186-207,213-227,285,287,289-292
+index.html
+  s_055e222f88e1b7::t_f3d79875015917 93-94,226-232
+  s_055e222f88e1b7::t_45d5bab74f603a 91-92,95,224-225,233,251,278-284,319-337,339-340,349-356,365,506,560,564,674-694
+  s_94c5a9e22619ae::t_d4667ead76f4cd 463
+  s_94c5a9e22619ae::t_80a0346e3e8278 133-135,255,455-456,464,543-545
+ui.test.js
+  s_055e222f88e1b7::t_9b46fc7dce3767 1-20
+server.test.js
+  s_94c5a9e22619ae::t_f27ba00d104e39 208-216,230,255,390-411
+  s_94c5a9e22619ae::t_8a6eaa04ab061a 412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6c7ef0a598f5f03aaee96700fd3a501f0f785aad",
+  "prompts": {},
+  "sessions": {
+    "s_055e222f88e1b7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f2e9-ebfa-73e1-8e5d-3d816b670fa2",
+        "model": "gpt-5.5"
+      },
+      "human_author": "danhtruong254 <danhtruong@everfit.io>"
+    },
+    "s_94c5a9e22619ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27c9879b-63a0-4787-bb09-2e7862204e67",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "danhtruong254 <danhtruong@everfit.io>"
+    }
+  }
+}
