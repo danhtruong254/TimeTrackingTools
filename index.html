@@ -170,6 +170,10 @@
   .side-head > div { display: flex; flex-direction: column; gap: 4px; }
   .side-total { align-items: flex-end; }
   .caption { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-subtle); }
+  .mode-tabs { width: 180px; }
+  .mode-tabs button { height: 34px; }
+  .icon-btn:disabled { opacity: 0.35; cursor: default; }
+  .day .n small { margin-left: 4px; font-size: 11px; font-weight: 500; color: var(--fg-subtle); }
   .side-title, .side-sum { font-size: 20px; font-weight: 700; }
   .side-sub { font-size: 12px; color: var(--fg-muted); }
   .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 10px; }
@@ -210,6 +214,10 @@
 <div class="topbar" aria-hidden="true"></div>
 <header class="top">
   <div class="controls">
+    <div id="mode-tabs" class="tabs mode-tabs" role="group" aria-label="Period">
+      <button type="button" data-mode="month">Month</button>
+      <button type="button" data-mode="sprint">Sprint</button>
+    </div>
     <div class="monthnav">
       <button id="prev" class="icon-btn" aria-label="Previous month"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
       <div class="month">
@@ -266,7 +274,7 @@
         <span id="side-sub" class="side-sub"></span>
       </div>
     </div>
-    <div class="tabs" role="group" aria-label="Breakdown view">
+    <div id="breakdown-tabs" class="tabs" role="group" aria-label="Breakdown view">
       <button type="button" data-view="ticket">By ticket</button>
       <button type="button" data-view="entries">Entries</button>
     </div>
@@ -293,6 +301,8 @@ const $ = (sel) => document.querySelector(sel);
 const toMs = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); };
 const weekday = (s) => WEEKDAYS[new Date(toMs(s)).getUTCDay()];
 const daysInMonth = (month) => { const [y, m] = month.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); };
+const addDays = (date, n) => new Date(toMs(date) + n * 86400000).toISOString().slice(0, 10);
+const monthBounds = (month) => ({ start: `${month}-01`, end: `${month}-${String(daysInMonth(month)).padStart(2, '0')}` });
 const shiftMonth = (month, n) => { const [y, m] = month.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7); };
 function todayIn(tz) {
   const p = {};
@@ -344,7 +354,9 @@ let personChoice = (() => { try { return JSON.parse(localStorage.getItem('person
 // First month is guessed locally; the first load re-loads once if the server's timeZone says today is in another month.
 let seq = 0; // request token: only the latest load may touch state
 const initialMonth = todayIn(tzChoice || Intl.DateTimeFormat().resolvedOptions().timeZone).slice(0, 7);
-const state = { month: null, data: null, selected: null, groupBy: 'ticket', loading: false, error: null, pending: null };
+const state = { month: null, data: null, selected: null, groupBy: 'ticket', loading: false, error: null, pending: null, range: null };
+// 'month' or 'sprint' (the active Core sprint, which can span months). Remembered per browser.
+let mode = (() => { try { return localStorage.getItem('mode') === 'sprint' ? 'sprint' : 'month'; } catch { return 'month'; } })();
 
 function targetMap() {
   return targetProfileChoice === 'custom' ? customTargets : TARGET_PROFILES[targetProfileChoice].targets;
@@ -354,13 +366,12 @@ function targetFor(date) {
   return targetMap()[weekday(date)] || 0;
 }
 
-function compute(data, month) {
+function compute(data, range) {
   const today = todayIn(data.timeZone);
   const byDay = {};
   for (const e of data.entries) byDay[e.date] = (byDay[e.date] || 0) + e.seconds;
   const days = [];
-  for (let d = 1; d <= daysInMonth(month); d++) {
-    const date = `${month}-${String(d).padStart(2, '0')}`;
+  for (let date = range.start; date <= range.end; date = addDays(date, 1)) {
     const logged = byDay[date] || 0;
     const target = targetFor(date) * 3600;
     let status;
@@ -391,23 +402,62 @@ function groupTotals(entries, by) {
   return [...groups.values()].sort((a, b) => b.seconds - a.seconds);
 }
 
+async function fetchMonth(month, refresh) {
+  const tz = tzChoice ? `&tz=${encodeURIComponent(tzChoice)}` : '';
+  const account = personChoice ? `&account=${encodeURIComponent(personChoice.accountId)}` : '';
+  const res = await fetch(`/api/worklogs?month=${month}${refresh ? '&refresh=1' : ''}${tz}${account}`);
+  const body = (await res.json().catch(() => null)) || {};
+  if (!res.ok) {
+    throw new Error(body.status === 401 || body.status === 403 ? 'Check JIRA_EMAIL / JIRA_API_TOKEN' : body.error || `HTTP ${res.status}`);
+  }
+  if (!Array.isArray(body.entries)) throw new Error('Unexpected response from server');
+  return body;
+}
+
+// Reload whatever is on screen (after Refresh, or a person/timezone change).
+const reload = (refresh = false) => (mode === 'sprint' ? loadSprint(refresh) : load(state.pending || state.month || initialMonth, refresh));
+
+// Sprint view: fetch every month the sprint touches, keep only the sprint's days.
+async function loadSprint(refresh = false) {
+  const id = ++seq;
+  state.pending = 'sprint';
+  state.loading = true;
+  render();
+  try {
+    const current = todayIn(state.data?.timeZone || tzChoice || Intl.DateTimeFormat().resolvedOptions().timeZone).slice(0, 7);
+    const first = await fetchMonth(current, refresh); // also tells us the sprint, in the chosen timezone
+    const sp = first.sprint;
+    if (!sp) throw new Error('No active Core sprint found');
+    const months = [];
+    for (let m = sp.start.slice(0, 7); m <= sp.end.slice(0, 7); m = shiftMonth(m, 1)) months.push(m);
+    const bodies = await Promise.all(months.map((m) => (m === current ? first : fetchMonth(m, refresh))));
+    if (id !== seq) return;
+    const entries = bodies.flatMap((b) => b.entries).filter((e) => e.date >= sp.start && e.date <= sp.end);
+    if (state.range?.start !== sp.start || state.range?.end !== sp.end) state.selected = null;
+    Object.assign(state, { month: state.month || current, data: { ...first, entries }, range: { start: sp.start, end: sp.end }, pending: null, error: null });
+    $('#tz option[value=""]').textContent = `Jira profile (${first.profileTimeZone})`;
+  } catch (err) {
+    if (id !== seq) return;
+    state.error = err.message;
+    state.pending = null;
+  } finally {
+    if (id === seq) {
+      state.loading = false;
+      render();
+    }
+  }
+}
+
 async function load(month, refresh = false, initial = false) {
   const id = ++seq;
   state.pending = month;
   state.loading = true;
   render();
   try {
-    const tz = tzChoice ? `&tz=${encodeURIComponent(tzChoice)}` : '';
-    const account = personChoice ? `&account=${encodeURIComponent(personChoice.accountId)}` : '';
-    const res = await fetch(`/api/worklogs?month=${month}${refresh ? '&refresh=1' : ''}${tz}${account}`);
-    const body = (await res.json().catch(() => null)) || {};
+    const body = await fetchMonth(month, refresh);
     if (id !== seq) return;
-    if (!res.ok) {
-      throw new Error(body.status === 401 || body.status === 403 ? 'Check JIRA_EMAIL / JIRA_API_TOKEN' : body.error || `HTTP ${res.status}`);
-    }
-    if (!Array.isArray(body.entries)) throw new Error('Unexpected response from server');
-    if (month !== state.month) state.selected = null;
-    Object.assign(state, { month, data: body, pending: null, error: null });
+    if (month !== state.month || mode !== 'month' || state.range?.start !== `${month}-01`) state.selected = null;
+    Object.assign(state, { month, data: body, range: monthBounds(month), pending: null, error: null });
     $('#tz option[value=""]').textContent = `Jira profile (${body.profileTimeZone})`;
     const real = todayIn(body.timeZone).slice(0, 7);
     if (initial && real !== month) return load(real);
@@ -462,7 +512,7 @@ function renderDay(d) {
   const badge = isToday ? '<span class="chip-today">Today</span>' : over ? `<span class="over">+${fmt(d.logged - d.target)}</span>` : '';
   const aria = `${d.date} ${weekday(d.date)}, ${t === 'future' ? '' : `${fmt(d.logged)}, `}${STATUS_TEXT[d.status]}${inSprint ? `, in sprint ${esc(sp.name)}` : ''}`;
   return `<button type="button" class="day ${t}${isToday ? ' today' : ''}${sel ? ' sel' : ''}${inSprint ? ' sprint' : ''}" data-date="${d.date}" aria-pressed="${sel}" aria-label="${aria}"${t === 'future' ? ' disabled' : ''}>
-    <span class="day-top"><span class="n">${Number(d.date.slice(8))}</span>${badge}</span>
+    <span class="day-top"><span class="n">${Number(d.date.slice(8))}${mode === 'sprint' && (d.date === state.range.start || d.date.endsWith('-01')) ? `<small>${MONTH_SHORT.format(new Date(toMs(d.date)))}</small>` : ''}</span>${badge}</span>
     <span class="day-bottom"><span class="h">${label}</span>${bar(pct)}</span>
   </button>`;
 }
@@ -501,11 +551,17 @@ function renderSkeleton() {
   $('#list').innerHTML = Array.from({ length: 6 }, () => `<div class="row">${line('40%', 12)}${line('85%', 14)}${line('100%', 4)}</div>`).join('');
 }
 
+const shortDate = (date) => `${Number(date.slice(8))} ${MONTH_SHORT.format(new Date(toMs(date)))}`;
+
 function render() {
-  const month = state.pending || state.month || initialMonth;
+  const month = state.pending && state.pending !== 'sprint' ? state.pending : state.month || initialMonth;
   syncTargetControls();
-  $('#month').textContent = month;
-  $('#month-name').textContent = MONTH_NAME.format(new Date(toMs(`${month}-01`)));
+  const sprintView = mode === 'sprint';
+  const sp = state.data?.sprint;
+  $('#month').textContent = sprintView ? (sp && state.range ? `${shortDate(state.range.start)} – ${shortDate(state.range.end)}` : '') : month;
+  $('#month-name').textContent = sprintView ? (sp?.name || 'Current sprint') : MONTH_NAME.format(new Date(toMs(`${month}-01`)));
+  $('#prev').disabled = $('#next').disabled = sprintView;
+  for (const b of document.querySelectorAll('#mode-tabs button')) b.setAttribute('aria-pressed', b.dataset.mode === mode);
   $('#status').textContent = state.loading ? 'Loading…' : '';
   $('#status').classList.toggle('sr-only', state.loading); // announced, not shown: the loading UI shows it
   document.body.classList.toggle('loading', state.loading);
@@ -513,7 +569,7 @@ function render() {
   $('main').setAttribute('aria-busy', state.loading);
   $('#banner').textContent = state.error || '';
   $('#banner').style.display = state.error ? 'block' : 'none';
-  for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-pressed', b.dataset.view === state.groupBy);
+  for (const b of document.querySelectorAll('#breakdown-tabs button')) b.setAttribute('aria-pressed', b.dataset.view === state.groupBy);
   if (!state.data) {
     // Skeleton only while the first load is in flight; after an error with no data, show nothing (never a fake empty calendar).
     const skeleton = state.loading && !state.error;
@@ -525,7 +581,7 @@ function render() {
   $('main').style.display = '';
   $('main').classList.toggle('busy', state.loading);
   if (document.activeElement !== $('#person')) $('#person').value = personLabel();
-  const v = compute(state.data, state.month);
+  const v = compute(state.data, state.range);
 
   const pct = v.target ? Math.round((v.logged / v.target) * 100) : 0;
   $('#kpis').innerHTML = `
@@ -538,16 +594,15 @@ function render() {
     <div class="kpi"><span class="kpi-label">Gap days</span><div class="kpi-value${v.gapDays ? ' amber' : ''}">${v.gapDays}</div></div>
     <div class="kpi${v.missing ? ' kpi-alert' : ''}"><span class="kpi-label">Missing</span><div class="kpi-value${v.missing ? ' red' : ''}">${fmt(v.missing)}</div></div>`;
 
-  const lead = (new Date(toMs(`${state.month}-01`)).getUTCDay() + 6) % 7; // Monday-first
+  const lead = (new Date(toMs(state.range.start)).getUTCDay() + 6) % 7; // Monday-first
   $('#cal').innerHTML = '<div aria-hidden="true"></div>'.repeat(lead) + v.days.map(renderDay).join('');
-  const sp = state.data.sprint;
   $('#legend-sprint').hidden = !sp;
   if (sp) $('#legend-sprint-text').textContent = `${sp.name} · ${Number(sp.start.slice(8))} ${MONTH_SHORT.format(new Date(toMs(sp.start)))} – ${Number(sp.end.slice(8))} ${MONTH_SHORT.format(new Date(toMs(sp.end)))}`;
 
   const entries = state.data.entries.filter((e) => !state.selected || e.date === state.selected);
   const selDay = state.selected && v.days.find((d) => d.date === state.selected);
   const tickets = new Set(entries.map((e) => e.issueKey)).size;
-  $('#side-title').textContent = state.selected ? dayLabel(state.selected) : MONTH_NAME.format(new Date(toMs(`${state.month}-01`)));
+  $('#side-title').textContent = state.selected ? dayLabel(state.selected) : $('#month-name').textContent;
   $('#side-sum').textContent = fmt(sum(entries, (e) => e.seconds));
   $('#side-sum').className = `side-sum ${selDay ? TONE_COLOR[tone(selDay)] || '' : ''}`;
   $('#side-sub').textContent = entries.length ? `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} · ${plural(tickets, 'ticket')}` : 'nothing logged';
@@ -556,10 +611,10 @@ function render() {
 
 async function copySummary() {
   if (!state.data) return;
-  const v = compute(state.data, state.month);
+  const v = compute(state.data, state.range);
   const profile = targetProfileChoice === 'custom' ? 'Custom' : TARGET_PROFILES[targetProfileChoice].label;
   const lines = [
-    `Jira time — ${state.data.person.displayName} — ${state.month} (${state.data.timeZone})`,
+    `Jira time — ${state.data.person.displayName} — ${mode === 'sprint' ? `${state.data.sprint.name} (${state.range.start} – ${state.range.end})` : state.month} (${state.data.timeZone})`,
     `Logged ${fmt(v.logged)} · Target ${fmt(v.target)} · Gap days ${v.gapDays} · Missing ${fmt(v.missing)}`,
     `Target profile: ${profile}`,
     '',
@@ -630,7 +685,7 @@ function pickPerson(p) {
   $('#person').value = personLabel();
   $('#person').blur();
   state.selected = null;
-  load(state.pending || state.month || initialMonth);
+  reload();
 }
 
 function moveActive(delta) {
@@ -663,13 +718,21 @@ $('#person').value = personLabel();
 
 $('#prev').onclick = () => load(shiftMonth(state.pending || state.month || initialMonth, -1));
 $('#next').onclick = () => load(shiftMonth(state.pending || state.month || initialMonth, 1));
-$('#refresh').onclick = () => load(state.pending || state.month || initialMonth, true);
+$('#refresh').onclick = () => reload(true);
+for (const b of document.querySelectorAll('#mode-tabs button')) {
+  b.onclick = () => {
+    if (mode === b.dataset.mode) return;
+    mode = b.dataset.mode;
+    try { localStorage.setItem('mode', mode); } catch {}
+    reload();
+  };
+}
 $('#copy').onclick = copySummary;
 $('#tz').value = tzChoice;
 $('#tz').onchange = (e) => {
   tzChoice = e.target.value;
   try { localStorage.setItem('tz', tzChoice); } catch {}
-  load(state.pending || state.month || initialMonth);
+  reload();
 };
 function syncTargetControls() {
   $('#target-profile').value = targetProfileChoice;
@@ -692,7 +755,7 @@ $('#target-editor').oninput = (e) => {
   try { localStorage.setItem('customTargets', JSON.stringify(customTargets)); } catch {}
   render();
 };
-for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => { state.groupBy = b.dataset.view; render(); };
+for (const b of document.querySelectorAll('#breakdown-tabs button')) b.onclick = () => { state.groupBy = b.dataset.view; render(); };
 $('#cal').onclick = (e) => {
   const el = e.target.closest('.day');
   if (!el || el.classList.contains('future')) return;
@@ -701,7 +764,8 @@ $('#cal').onclick = (e) => {
   document.querySelector(`#cal [data-date="${el.dataset.date}"]`).focus();
 };
 
-load(initialMonth, false, true);
+if (mode === 'sprint') loadSprint();
+else load(initialMonth, false, true);
 </script>
 </body>
 </html>

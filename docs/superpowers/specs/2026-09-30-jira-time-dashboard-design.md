@@ -107,6 +107,12 @@ Ported from the `Main.dc.html` design canvas and `tokens.json`; display only, th
 - `/api/worklogs` takes optional `account=<accountId>` (validated `^[A-Za-z0-9:_-]{1,128}$`, 400 otherwise). JQL is `worklogAuthor = "<accountId>"` for everyone, including me; `toEntries` filters by that accountId. The person's profile timezone (from `/rest/api/3/user?accountId=`, cached) backs the "Jira profile" option. Cache key is `accountId|month|tz`. Response adds `person: {accountId, displayName}`; Copy summary names the person.
 - Visibility follows Jira permissions: worklogs on issues the API token's user can't browse are not returned.
 
+### Sprint highlight and Sprint view
+
+- Server finds the Sprint field (`com.pyxis.greenhopper.jira:gh-sprint`), runs `project = UP AND sprint in openSprints()` and picks the first active sprint whose name contains "core" (Jira rejects `sprint ~ "Core"`, so the name match is done in code). Cached 10 min, reloaded on `refresh=1`; a failed lookup yields `sprint: null` without failing the month. Every worklogs response carries `sprint: {name, start, end}` with dates in the viewing timezone.
+- Month view: sprint days get an accent strip; legend names the sprint and its dates.
+- Month | Sprint switch (remembered per browser). Sprint view fetches each month the sprint touches, keeps entries within the sprint's dates, and `compute()` runs over that date range, so KPIs, calendar, breakdown and Copy summary cover the sprint. Month arrows are disabled in Sprint view.
+
 ## Error handling
 
 - Missing env var at startup: exit with a message naming the missing variable.
