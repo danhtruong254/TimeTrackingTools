@@ -205,6 +205,15 @@ function get(pathname, host = `127.0.0.1:${TEST_PORT}`) {
 function fakeJira(myself = { accountId: ME, displayName: 'Me Myself', timeZone: 'UTC' }) {
   const jira = async (p, init) => {
     if (p === '/rest/api/3/myself') return myself;
+    if (p === '/rest/api/3/field') return [{ id: 'summary', schema: {} }, { id: 'customfield_10010', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } }];
+    if (p === '/rest/api/3/search/jql' && JSON.parse(init.body).jql.includes('openSprints()')) {
+      jira.sprintSearches++;
+      return { issues: [{ key: 'UP-1', fields: { customfield_10010: [
+        { name: 'Challenger 1', state: 'active', startDate: '2026-09-28T02:53:13.006Z', endDate: '2026-10-07T07:00:00.000Z' },
+        { name: 'Core 17-26', state: 'closed', startDate: '2026-09-09T06:00:00.000Z', endDate: '2026-09-23T06:00:00.000Z' },
+        { name: 'Core 18-26', state: 'active', startDate: '2026-09-23T06:27:45.183Z', endDate: '2026-10-07T06:27:41.000Z' },
+      ] } }] };
+    }
     if (p === '/rest/api/3/search/jql') { jira.searches++; jira.lastJql = JSON.parse(init.body).jql; return { issues: [] }; }
     if (p === '/rest/api/3/user?accountId=acc-2') return { accountId: 'acc-2', displayName: 'Thuy Ha', timeZone: 'Asia/Ho_Chi_Minh' };
     if (p.startsWith('/rest/api/3/user/search?')) {
@@ -218,6 +227,7 @@ function fakeJira(myself = { accountId: ME, displayName: 'Me Myself', timeZone: 
     throw new Error(`unexpected ${p}`);
   };
   jira.searches = 0;
+  jira.sprintSearches = 0;
   return jira;
 }
 
@@ -242,7 +252,7 @@ test('server caches past months only; refresh=1 bypasses', async () => {
   const server = await startServer(jira);
   try {
     const first = await get('/api/worklogs?month=2026-08');
-    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', person: { accountId: ME, displayName: 'Me Myself' }, entries: [] });
+    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', person: { accountId: ME, displayName: 'Me Myself' }, entries: [], sprint: { name: 'Core 18-26', start: '2026-09-23', end: '2026-10-07' } });
     await get('/api/worklogs?month=2026-08');
     assert.equal(jira.searches, 1);
     await get('/api/worklogs?month=2026-08&refresh=1');
@@ -376,4 +386,27 @@ test('fetchMonth uses worklogs embedded in search results and only fetches issue
   const entries = await fetchMonth(jira, '2026-09', { accountId: ME, timeZone: 'UTC' });
   assert.deepEqual(entries.map((e) => [e.date, e.issueKey, e.seconds]), [['2026-09-01', 'EF-1', 3600], ['2026-09-02', 'OPS-2', 1800]]);
   assert.equal(calls.filter((c) => c.includes('/worklog')).length, 1); // EF-1 complete in search; OPS-2 had 21 > 1 shown
+});
+
+test('server adds the active Core sprint in the viewing timezone, cached, failure tolerated', async () => {
+  const jira = fakeJira();
+  const server = await startServer(jira);
+  try {
+    // 2026-09-23T06:27Z is 13:27 in Ho Chi Minh; 2026-10-07T06:27Z is 13:27 too.
+    assert.deepEqual((await get('/api/worklogs?month=2026-08&tz=Asia/Ho_Chi_Minh')).body.sprint, { name: 'Core 18-26', start: '2026-09-23', end: '2026-10-07' });
+    // Same instants seen from Los Angeles fall on the previous evening.
+    assert.deepEqual((await get('/api/worklogs?month=2026-08&tz=America/Los_Angeles')).body.sprint, { name: 'Core 18-26', start: '2026-09-22', end: '2026-10-06' });
+    assert.equal(jira.sprintSearches, 1); // cached
+    await get('/api/worklogs?month=2026-08&refresh=1');
+    assert.equal(jira.sprintSearches, 2); // refresh reloads it
+  } finally { server.close(); }
+
+  const noSprint = fakeJira();
+  const broken = async (p, init) => (p === '/rest/api/3/field' ? Promise.reject(new JiraError('Jira 500 on /rest/api/3/field', 500)) : noSprint(p, init));
+  const server2 = await startServer(broken);
+  try {
+    const r = await get('/api/worklogs?month=2026-08');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.sprint, null);
+  } finally { server2.close(); }
 });

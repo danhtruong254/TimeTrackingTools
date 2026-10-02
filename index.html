@@ -88,6 +88,11 @@
     mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") center / contain no-repeat; }
   .tz select { appearance: none; -webkit-appearance: none; height: 44px; padding: 0 40px 0 14px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 14px; cursor: pointer; }
   .tz select:hover { background: var(--bg-hover); }
+  .target-editor { display: flex; align-items: center; gap: 6px; }
+  .target-editor[hidden] { display: none; }
+  .target-day { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; font-weight: 600; color: var(--fg-subtle); }
+  .target-input { width: 46px; height: 30px; padding: 0 6px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg); font: 13px var(--font-mono); text-align: center; }
+  .target-input:hover { background: var(--bg-hover); }
   .combo { position: relative; }
   .combo input { width: 240px; height: 44px; padding: 0 14px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 14px; }
   .combo input:hover { background: var(--bg-hover); }
@@ -125,6 +130,9 @@
   .dow { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-subtle); }
   .dow span { padding-left: 4px; }
   .day { height: 100px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; text-align: left; background: transparent; border: 1px solid var(--border); border-radius: 10px; }
+  .day { position: relative; }
+  .day.sprint::before { content: ''; position: absolute; top: -1px; left: 12px; right: 12px; height: 3px; border-radius: 0 0 3px 3px; background: var(--accent); }
+  .legend i.sprint-key { height: 3px; width: 14px; border-radius: 2px; background: var(--accent); }
   .day:hover:not(:disabled) { border-color: var(--border-strong); }
   .day-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; width: 100%; }
   .day .n { font-size: 13px; font-weight: 600; color: var(--fg-muted); }
@@ -213,6 +221,16 @@
     <div class="vsep"></div>
     <button id="refresh" class="btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>Refresh</button>
     <button id="copy" class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy summary</button>
+    <label class="tz">Target <span class="select-wrap"><select id="target-profile"><option value="everyday8">Every day 8h</option><option value="weekdays8">Weekdays 8h</option><option value="lightWeek">Light week</option><option value="custom">Custom</option></select></span></label>
+    <div id="target-editor" class="target-editor" aria-label="Custom daily targets" hidden>
+      <label class="target-day">Mon<input class="target-input" data-day="Mon" type="number" min="0" max="24" step="0.25" aria-label="Monday target hours"></label>
+      <label class="target-day">Tue<input class="target-input" data-day="Tue" type="number" min="0" max="24" step="0.25" aria-label="Tuesday target hours"></label>
+      <label class="target-day">Wed<input class="target-input" data-day="Wed" type="number" min="0" max="24" step="0.25" aria-label="Wednesday target hours"></label>
+      <label class="target-day">Thu<input class="target-input" data-day="Thu" type="number" min="0" max="24" step="0.25" aria-label="Thursday target hours"></label>
+      <label class="target-day">Fri<input class="target-input" data-day="Fri" type="number" min="0" max="24" step="0.25" aria-label="Friday target hours"></label>
+      <label class="target-day">Sat<input class="target-input" data-day="Sat" type="number" min="0" max="24" step="0.25" aria-label="Saturday target hours"></label>
+      <label class="target-day">Sun<input class="target-input" data-day="Sun" type="number" min="0" max="24" step="0.25" aria-label="Sunday target hours"></label>
+    </div>
     <label class="tz">Time zone <span class="select-wrap"><select id="tz"><option value="Asia/Ho_Chi_Minh">UTC+7 (local)</option><option value="">Jira profile</option></select></span></label>
     <label class="tz" for="person">Viewing
       <span class="combo">
@@ -230,10 +248,11 @@
     <div class="dow" aria-hidden="true"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
     <div id="cal" class="cal"></div>
     <div class="legend">
-      <span><i style="background: var(--green)"></i>On target (≥ 8h)</span>
+      <span><i style="background: var(--green)"></i>On target</span>
       <span><i style="background: var(--amber)"></i>Partial</span>
       <span><i style="background: var(--red)"></i>Missing workday</span>
       <span><i style="border: 1px dashed var(--border-strong)"></i>Weekend</span>
+      <span id="legend-sprint" hidden><i class="sprint-key"></i><span id="legend-sprint-text"></span></span>
     </div>
   </section>
   <aside class="card side" aria-label="Breakdown">
@@ -256,7 +275,13 @@
 </main>
 <script>
 // Hours per weekday. 0 = day off (shown neutral, never counted as a gap).
-const TARGETS = { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 8, Sun: 8 };
+const TARGET_PROFILES = {
+  everyday8: { label: 'Every day 8h', targets: { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 8, Sun: 8 } },
+  weekdays8: { label: 'Weekdays 8h', targets: { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 0, Sun: 0 } },
+  lightWeek: { label: 'Light week', targets: { Mon: 6, Tue: 6, Wed: 6, Thu: 6, Fri: 6, Sat: 0, Sun: 0 } },
+};
+const DEFAULT_TARGET_PROFILE = 'everyday8';
+const DEFAULT_CUSTOM_TARGETS = { ...TARGET_PROFILES.weekdays8.targets };
 // Timezone used to put worklogs on days. '' = Jira profile timezone. The choice is remembered per browser.
 const DEFAULT_TZ = 'Asia/Ho_Chi_Minh';
 
@@ -291,7 +316,28 @@ const link = (key) => `<a class="key" href="${esc(state.data.baseUrl)}/browse/${
 function savedTz() {
   try { return localStorage.getItem('tz') ?? DEFAULT_TZ; } catch { return DEFAULT_TZ; }
 }
+function savedTargetProfile() {
+  try {
+    const p = localStorage.getItem('targetProfile') || DEFAULT_TARGET_PROFILE;
+    return p === 'custom' || TARGET_PROFILES[p] ? p : DEFAULT_TARGET_PROFILE;
+  } catch {
+    return DEFAULT_TARGET_PROFILE;
+  }
+}
+function savedCustomTargets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('customTargets') || '{}');
+    return Object.fromEntries(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => {
+      const value = Number(raw[day]);
+      return [day, Number.isFinite(value) && value >= 0 ? Math.min(24, value) : DEFAULT_CUSTOM_TARGETS[day]];
+    }));
+  } catch {
+    return { ...DEFAULT_CUSTOM_TARGETS };
+  }
+}
 let tzChoice = savedTz();
+let targetProfileChoice = savedTargetProfile();
+let customTargets = savedCustomTargets();
 // Whose worklogs to show: null = me, else { accountId, displayName }. Remembered per browser.
 let personChoice = (() => { try { return JSON.parse(localStorage.getItem('person')) || null; } catch { return null; } })();
 
@@ -299,6 +345,14 @@ let personChoice = (() => { try { return JSON.parse(localStorage.getItem('person
 let seq = 0; // request token: only the latest load may touch state
 const initialMonth = todayIn(tzChoice || Intl.DateTimeFormat().resolvedOptions().timeZone).slice(0, 7);
 const state = { month: null, data: null, selected: null, groupBy: 'ticket', loading: false, error: null, pending: null };
+
+function targetMap() {
+  return targetProfileChoice === 'custom' ? customTargets : TARGET_PROFILES[targetProfileChoice].targets;
+}
+
+function targetFor(date) {
+  return targetMap()[weekday(date)] || 0;
+}
 
 function compute(data, month) {
   const today = todayIn(data.timeZone);
@@ -308,7 +362,7 @@ function compute(data, month) {
   for (let d = 1; d <= daysInMonth(month); d++) {
     const date = `${month}-${String(d).padStart(2, '0')}`;
     const logged = byDay[date] || 0;
-    const target = TARGETS[weekday(date)] * 3600;
+    const target = targetFor(date) * 3600;
     let status;
     if (date > today) status = 'future';
     else if (date === today) status = 'today';
@@ -398,14 +452,16 @@ function splitTitle(summary) {
 
 function renderDay(d) {
   const t = tone(d);
+  const sp = state.data.sprint;
+  const inSprint = sp && d.date >= sp.start && d.date <= sp.end;
   const isToday = d.status === 'today';
   const sel = d.date === state.selected;
   const over = !isToday && d.target > 0 && d.logged > d.target;
   const label = t === 'future' ? '' : t === 'none' && !isToday ? '—' : fmt(d.logged);
   const pct = t === 'future' ? 0 : (d.logged / (d.target || 8 * 3600)) * 100;
   const badge = isToday ? '<span class="chip-today">Today</span>' : over ? `<span class="over">+${fmt(d.logged - d.target)}</span>` : '';
-  const aria = `${d.date} ${weekday(d.date)}, ${t === 'future' ? '' : `${fmt(d.logged)}, `}${STATUS_TEXT[d.status]}`;
-  return `<button type="button" class="day ${t}${isToday ? ' today' : ''}${sel ? ' sel' : ''}" data-date="${d.date}" aria-pressed="${sel}" aria-label="${aria}"${t === 'future' ? ' disabled' : ''}>
+  const aria = `${d.date} ${weekday(d.date)}, ${t === 'future' ? '' : `${fmt(d.logged)}, `}${STATUS_TEXT[d.status]}${inSprint ? `, in sprint ${esc(sp.name)}` : ''}`;
+  return `<button type="button" class="day ${t}${isToday ? ' today' : ''}${sel ? ' sel' : ''}${inSprint ? ' sprint' : ''}" data-date="${d.date}" aria-pressed="${sel}" aria-label="${aria}"${t === 'future' ? ' disabled' : ''}>
     <span class="day-top"><span class="n">${Number(d.date.slice(8))}</span>${badge}</span>
     <span class="day-bottom"><span class="h">${label}</span>${bar(pct)}</span>
   </button>`;
@@ -447,6 +503,7 @@ function renderSkeleton() {
 
 function render() {
   const month = state.pending || state.month || initialMonth;
+  syncTargetControls();
   $('#month').textContent = month;
   $('#month-name').textContent = MONTH_NAME.format(new Date(toMs(`${month}-01`)));
   $('#status').textContent = state.loading ? 'Loading…' : '';
@@ -483,6 +540,9 @@ function render() {
 
   const lead = (new Date(toMs(`${state.month}-01`)).getUTCDay() + 6) % 7; // Monday-first
   $('#cal').innerHTML = '<div aria-hidden="true"></div>'.repeat(lead) + v.days.map(renderDay).join('');
+  const sp = state.data.sprint;
+  $('#legend-sprint').hidden = !sp;
+  if (sp) $('#legend-sprint-text').textContent = `${sp.name} · ${Number(sp.start.slice(8))} ${MONTH_SHORT.format(new Date(toMs(sp.start)))} – ${Number(sp.end.slice(8))} ${MONTH_SHORT.format(new Date(toMs(sp.end)))}`;
 
   const entries = state.data.entries.filter((e) => !state.selected || e.date === state.selected);
   const selDay = state.selected && v.days.find((d) => d.date === state.selected);
@@ -497,9 +557,11 @@ function render() {
 async function copySummary() {
   if (!state.data) return;
   const v = compute(state.data, state.month);
+  const profile = targetProfileChoice === 'custom' ? 'Custom' : TARGET_PROFILES[targetProfileChoice].label;
   const lines = [
     `Jira time — ${state.data.person.displayName} — ${state.month} (${state.data.timeZone})`,
     `Logged ${fmt(v.logged)} · Target ${fmt(v.target)} · Gap days ${v.gapDays} · Missing ${fmt(v.missing)}`,
+    `Target profile: ${profile}`,
     '',
     ...v.days.filter((d) => d.status !== 'future')
       .map((d) => `${d.date} ${weekday(d.date)}  ${fmt(d.logged)}${d.status === 'today' ? ' (in progress)' : ''}`),
@@ -608,6 +670,27 @@ $('#tz').onchange = (e) => {
   tzChoice = e.target.value;
   try { localStorage.setItem('tz', tzChoice); } catch {}
   load(state.pending || state.month || initialMonth);
+};
+function syncTargetControls() {
+  $('#target-profile').value = targetProfileChoice;
+  $('#target-editor').hidden = targetProfileChoice !== 'custom';
+  if (document.activeElement?.classList.contains('target-input')) return;
+  for (const input of document.querySelectorAll('.target-input')) input.value = customTargets[input.dataset.day];
+}
+$('#target-profile').value = targetProfileChoice;
+$('#target-profile').onchange = (e) => {
+  targetProfileChoice = e.target.value;
+  try { localStorage.setItem('targetProfile', targetProfileChoice); } catch {}
+  state.selected = null;
+  render();
+};
+$('#target-editor').oninput = (e) => {
+  const input = e.target.closest('.target-input');
+  if (!input) return;
+  const value = Number(input.value);
+  customTargets[input.dataset.day] = Number.isFinite(value) && value >= 0 ? Math.min(24, value) : 0;
+  try { localStorage.setItem('customTargets', JSON.stringify(customTargets)); } catch {}
+  render();
 };
 for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => { state.groupBy = b.dataset.view; render(); };
 $('#cal').onclick = (e) => {

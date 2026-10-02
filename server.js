@@ -4,6 +4,11 @@ const path = require('node:path');
 
 const PORT = 3000;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// Sprint to highlight: the active sprint from this JQL whose name contains SPRINT_NAME.
+// (Jira rejects `sprint ~ "Core"` in JQL, so the name match happens here.)
+const SPRINT_JQL = 'project = UP AND sprint in openSprints()';
+const SPRINT_NAME = 'core';
+const SPRINT_TTL_MS = 10 * 60 * 1000;
 const ACCOUNT_RE = /^[A-Za-z0-9:_-]{1,128}$/; // Jira accountIds; also keeps them safe inside JQL quotes
 const TIMEOUT_MS = 15000;
 const CONCURRENCY = 5;
@@ -178,11 +183,48 @@ async function fetchMonth(jira, month, person) {
   return toEntries(issues, worklogsByIssue, person.accountId, month, person.timeZone);
 }
 
+async function fetchSprint(jira) {
+  const fields = await jira('/rest/api/3/field');
+  const field = fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint');
+  if (!field) return null;
+  let nextPageToken;
+  do {
+    const page = await jira('/rest/api/3/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({ jql: SPRINT_JQL, fields: [field.id], maxResults: 100, nextPageToken }),
+    });
+    for (const issue of page.issues) {
+      for (const s of issue.fields[field.id] || []) {
+        if (s.state === 'active' && s.startDate && s.endDate && s.name.toLowerCase().includes(SPRINT_NAME)) {
+          return { name: s.name, startDate: s.startDate, endDate: s.endDate };
+        }
+      }
+    }
+    nextPageToken = page.nextPageToken;
+  } while (nextPageToken);
+  return null;
+}
+
 function createServer({ jira, baseUrl, port, now = () => new Date() }) {
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]); // blocks DNS rebinding
   const cache = new Map(); // `${accountId}|${month}|${tz}` -> response; past months only
   const people = new Map(); // accountId -> { accountId, displayName, timeZone }
   let me;
+  let sprintCache = { at: -Infinity, value: null };
+
+  // Highlighting is a nice-to-have: a failed lookup gives no highlight instead of failing the month.
+  async function getSprint(force) {
+    if (!force && now() - sprintCache.at < SPRINT_TTL_MS) return sprintCache.value;
+    try {
+      sprintCache = { at: +now(), value: await fetchSprint(jira) };
+    } catch (err) {
+      console.warn(`Sprint lookup failed: ${err.message}`);
+      return null;
+    }
+    return sprintCache.value;
+  }
+
+  const sprintIn = (s, tz) => s && { name: s.name, start: localDate(new Date(s.startDate), tz), end: localDate(new Date(s.endDate), tz) };
 
   async function getMe() {
     if (!me) {
@@ -240,12 +282,14 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
       const { accountId, displayName, timeZone: profileTimeZone } = await getPerson(account);
       const timeZone = tzParam || profileTimeZone;
       const key = `${accountId}|${month}|${timeZone}`;
+      const refresh = url.searchParams.get('refresh') === '1';
       const past = isPastMonth(month, timeZone, now());
-      if (past && url.searchParams.get('refresh') !== '1' && cache.has(key)) return json(200, cache.get(key));
+      if (past && !refresh && cache.has(key)) return json(200, { ...cache.get(key), sprint: sprintIn(await getSprint(false), timeZone) });
       const person = { accountId, displayName };
-      const body = { baseUrl, timeZone, profileTimeZone, person, entries: await fetchMonth(jira, month, { accountId, timeZone }) };
-      if (past) cache.set(key, body);
-      json(200, body);
+      const [entries, sprint] = await Promise.all([fetchMonth(jira, month, { accountId, timeZone }), getSprint(refresh)]);
+      const body = { baseUrl, timeZone, profileTimeZone, person, entries };
+      if (past) cache.set(key, body); // sprint is added per response, so cached months never hold a stale one
+      json(200, { ...body, sprint: sprintIn(sprint, timeZone) });
     } catch (err) {
       console.error(err.message);
       if (res.headersSent) return res.end();
