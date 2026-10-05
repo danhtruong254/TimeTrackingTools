@@ -1,0 +1,23 @@
+server.js
+  s_94c5a9e22619ae::t_069b2511a8c165 289-290,292
+server.test.js
+  s_94c5a9e22619ae::t_61629e1ea4986b 255,349
+index.html
+  s_94c5a9e22619ae::t_069b2511a8c165 637-638,645,665
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "551526ee396af8c1107b23b06ba6b58f8b4e13e2",
+  "prompts": {},
+  "sessions": {
+    "s_94c5a9e22619ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27c9879b-63a0-4787-bb09-2e7862204e67",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "danhtruong254 <danhtruong@everfit.io>"
+    }
+  }
+}
