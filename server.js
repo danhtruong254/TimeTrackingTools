@@ -9,6 +9,8 @@ const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const SPRINT_JQL = 'project = UP AND sprint in openSprints()';
 const SPRINT_NAME = 'core';
 const SPRINT_TTL_MS = 10 * 60 * 1000;
+const EDIT_PATH_RE = /^\/api\/worklogs\/([A-Z][A-Z0-9_]*-\d+)\/(\d+)$/;
+const MAX_BODY_BYTES = 16 * 1024;
 const ACCOUNT_RE = /^[A-Za-z0-9:_-]{1,128}$/; // Jira accountIds; also keeps them safe inside JQL quotes
 const TIMEOUT_MS = 15000;
 const CONCURRENCY = 5;
@@ -74,6 +76,11 @@ function adfText(node) {
   return (node.type === 'paragraph' || node.type === 'heading' ? parts.join('') : parts.filter(Boolean).join('\n')).trim();
 }
 
+// Plain text back to ADF: one paragraph per line (formatting and mentions are not preserved).
+function textToAdf(text) {
+  return { type: 'doc', version: 1, content: text.split('\n').map((line) => ({ type: 'paragraph', content: line ? [{ type: 'text', text: line }] : [] })) };
+}
+
 // Source of truth for filtering: my worklogs whose local date (in tz) is inside month.
 function toEntries(issues, worklogsByIssue, accountId, month, tz) {
   const entries = [];
@@ -89,6 +96,7 @@ function toEntries(issues, worklogsByIssue, accountId, month, tz) {
         project: issue.fields.project.key,
         seconds: w.timeSpentSeconds,
         comment: adfText(w.comment),
+        id: w.id,
       });
     }
   }
@@ -205,8 +213,21 @@ async function fetchSprint(jira) {
   return null;
 }
 
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > MAX_BODY_BYTES) { reject(new Error('too large')); req.destroy(); }
+    });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
 function createServer({ jira, baseUrl, port, now = () => new Date() }) {
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]); // blocks DNS rebinding
+  const allowedOrigins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]); // writes only from this page (CSRF)
   const cache = new Map(); // `${accountId}|${month}|${tz}` -> response; past months only
   const people = new Map(); // accountId -> { accountId, displayName, timeZone }
   let me;
@@ -260,6 +281,32 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(html);
       }
+      const edit = url.pathname.match(EDIT_PATH_RE);
+      if (req.method === 'PUT' && edit) {
+        if (!allowedOrigins.has(req.headers.origin)) return json(403, { error: 'Edits must come from the dashboard page' });
+        if (!/^application\/json\b/.test(req.headers['content-type'] || '')) return json(415, { error: 'Content-Type must be application/json' });
+        let input;
+        try {
+          input = JSON.parse(await readBody(req));
+        } catch (err) {
+          return json(400, { error: err.message === 'too large' ? 'Body too large' : 'Body must be JSON' });
+        }
+        const { seconds, comment } = input || {};
+        if (seconds === undefined && comment === undefined) return json(400, { error: 'Nothing to change' });
+        if (seconds !== undefined && !(Number.isInteger(seconds) && seconds >= 60 && seconds <= 86400)) return json(400, { error: 'seconds must be a whole number from 60 to 86400' });
+        if (comment !== undefined && !(typeof comment === 'string' && comment.length <= 5000)) return json(400, { error: 'comment must be text up to 5000 characters' });
+
+        const [, issueKey, worklogId] = edit;
+        const self = await getMe();
+        const current = await jira(`/rest/api/3/issue/${issueKey}/worklog/${worklogId}`);
+        if (current.author?.accountId !== self.accountId) return json(403, { error: 'You can only edit your own worklogs' });
+        const update = {};
+        if (seconds !== undefined) update.timeSpentSeconds = seconds;
+        if (comment !== undefined) update.comment = textToAdf(comment);
+        const saved = await jira(`/rest/api/3/issue/${issueKey}/worklog/${worklogId}?adjustEstimate=leave&notifyUsers=false`, { method: 'PUT', body: JSON.stringify(update) });
+        for (const key of cache.keys()) if (key.startsWith(`${self.accountId}|`)) cache.delete(key);
+        return json(200, { id: saved.id, seconds: saved.timeSpentSeconds, comment: adfText(saved.comment) });
+      }
       if (req.method === 'GET' && url.pathname === '/api/users') {
         const q = (url.searchParams.get('q') || '').trim();
         if (!q || q.length > 100) return json(400, { error: 'q must be 1-100 characters' });
@@ -302,7 +349,7 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
 }
 
 module.exports = {
-  normalizeStarted, localDate, monthRange, isPastMonth, adfText, toEntries,
+  normalizeStarted, localDate, monthRange, isPastMonth, adfText, textToAdf, toEntries,
   JiraError, retryDelayMs, createJira, mapLimit, fetchMonth, createServer,
 };
 

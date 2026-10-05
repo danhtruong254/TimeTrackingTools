@@ -113,6 +113,11 @@ Ported from the `Main.dc.html` design canvas and `tokens.json`; display only, th
 - Month view: sprint days get an accent strip; legend names the sprint and its dates.
 - Month | Sprint switch (remembered per browser). Sprint view fetches each month the sprint touches, keeps entries within the sprint's dates, and `compute()` runs over that date range, so KPIs, calendar, breakdown and Copy summary cover the sprint. Month arrows are disabled in Sprint view.
 
+### Editing a worklog
+
+- Entries tab shows an Edit button per entry when viewing yourself. Inline form: time ("1h 30m", "1.5h", "90m", "1:30", bare hours; 1m–24h, whole minutes) and description. Save sends only changed fields; an unchanged description keeps its Jira rich formatting, a changed one is sent as plain-text ADF paragraphs.
+- `PUT /api/worklogs/:issueKey/:worklogId` with `{seconds?, comment?}`. Guards: `Origin` must be this dashboard (CSRF), `Content-Type: application/json`, body ≤ 16 KB, validated fields; the worklog is fetched first and must belong to you (403 otherwise). Jira call uses `adjustEstimate=leave&notifyUsers=false`. Your cached months are dropped after a save, then the view reloads.
+
 ## Error handling
 
 - Missing env var at startup: exit with a message naming the missing variable.

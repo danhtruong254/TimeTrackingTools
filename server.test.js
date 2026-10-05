@@ -50,7 +50,7 @@ test('toEntries drops worklogs by other authors', () => {
   const out = toEntries(issues, {
     'EF-1': [wl(ME, '2026-09-10T09:00:00.000+0700', 3600), wl('other', '2026-09-10T09:00:00.000+0700', 7200)],
   }, ME, '2026-09', 'Asia/Ho_Chi_Minh');
-  assert.deepEqual(out, [{ date: '2026-09-10', issueKey: 'EF-1', summary: 'Login bug', project: 'EF', seconds: 3600, comment: '' }]);
+  assert.deepEqual(out, [{ date: '2026-09-10', issueKey: 'EF-1', summary: 'Login bug', project: 'EF', seconds: 3600, comment: '', id: undefined }]);
 });
 
 test('toEntries drops dates outside the month, including the widened days', () => {
@@ -410,4 +410,91 @@ test('server adds the active Core sprint in the viewing timezone, cached, failur
     assert.equal(r.status, 200);
     assert.equal(r.body.sprint, null);
   } finally { server2.close(); }
+});
+
+const { textToAdf } = require('./server');
+
+test('textToAdf turns lines into ADF paragraphs and round-trips through adfText', () => {
+  const doc = textToAdf('Dev – Fix login – PR opened\n\nSecond line');
+  assert.deepEqual(doc, { type: 'doc', version: 1, content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Dev – Fix login – PR opened' }] },
+    { type: 'paragraph', content: [] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'Second line' }] },
+  ] });
+  assert.equal(adfText(doc), 'Dev – Fix login – PR opened\nSecond line');
+});
+
+function put(pathname, body, { origin = `http://localhost:${TEST_PORT}`, type = 'application/json' } = {}) {
+  return new Promise((resolve, reject) => {
+    const data = typeof body === 'string' ? body : JSON.stringify(body);
+    const headers = { Host: `127.0.0.1:${TEST_PORT}`, 'Content-Type': type, 'Content-Length': Buffer.byteLength(data) };
+    if (origin) headers.Origin = origin;
+    const req = http.request({ host: '127.0.0.1', port: TEST_PORT, path: pathname, method: 'PUT', headers, agent: false }, (res) => {
+      let b = '';
+      res.on('data', (c) => { b += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(b) }));
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+function editJira() {
+  const base = fakeJira();
+  const jira = async (p, init) => {
+    if (p === '/rest/api/3/issue/UP-1/worklog/101') {
+      if (!init?.method) return { id: '101', author: { accountId: ME }, timeSpentSeconds: 3600 };
+      jira.puts.push({ p, body: JSON.parse(init.body) });
+      return { id: '101', timeSpentSeconds: 5400, comment: JSON.parse(init.body).comment };
+    }
+    if (p === '/rest/api/3/issue/UP-1/worklog/202') return { id: '202', author: { accountId: 'someone-else' } };
+    if (p.startsWith('/rest/api/3/issue/UP-1/worklog/101?')) {
+      jira.puts.push({ p, method: init.method, body: JSON.parse(init.body) });
+      return { id: '101', timeSpentSeconds: JSON.parse(init.body).timeSpentSeconds ?? 3600, comment: JSON.parse(init.body).comment };
+    }
+    return base(p, init);
+  };
+  jira.puts = [];
+  jira.base = base;
+  return jira;
+}
+
+test('server edits own worklog time and comment, leaving estimates and watchers alone', async () => {
+  const jira = editJira();
+  const server = await startServer(jira);
+  try {
+    await get('/api/worklogs?month=2026-08'); // past month gets cached
+    assert.equal(jira.base.searches, 1);
+    const r = await put('/api/worklogs/UP-1/101', { seconds: 5400, comment: 'Dev – Fix – Done' });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { id: '101', seconds: 5400, comment: 'Dev – Fix – Done' });
+    assert.equal(jira.puts.length, 1);
+    assert.equal(jira.puts[0].method, 'PUT');
+    assert.equal(jira.puts[0].p, '/rest/api/3/issue/UP-1/worklog/101?adjustEstimate=leave&notifyUsers=false');
+    assert.deepEqual(jira.puts[0].body, { timeSpentSeconds: 5400, comment: textToAdf('Dev – Fix – Done') });
+    await get('/api/worklogs?month=2026-08');
+    assert.equal(jira.base.searches, 2); // cache dropped after the edit
+
+    const timeOnly = await put('/api/worklogs/UP-1/101', { seconds: 1800 });
+    assert.equal(timeOnly.status, 200);
+    assert.deepEqual(jira.puts[1].body, { timeSpentSeconds: 1800 }); // comment untouched keeps its rich formatting
+  } finally { server.close(); }
+});
+
+test('server refuses unsafe or invalid worklog edits', async () => {
+  const jira = editJira();
+  const server = await startServer(jira);
+  try {
+    assert.equal((await put('/api/worklogs/UP-1/202', { seconds: 60 })).status, 403); // someone else's worklog
+    assert.equal((await put('/api/worklogs/UP-1/101', { seconds: 60 }, { origin: 'https://evil.example' })).status, 403);
+    assert.equal((await put('/api/worklogs/UP-1/101', { seconds: 60 }, { origin: null })).status, 403);
+    assert.equal((await put('/api/worklogs/UP-1/101', '{"seconds":60}', { type: 'text/plain' })).status, 415);
+    assert.equal((await put('/api/worklogs/UP-1/101', '{bad json')).status, 400);
+    assert.equal((await put('/api/worklogs/UP-1/101', {})).status, 400);
+    assert.equal((await put('/api/worklogs/UP-1/101', { seconds: 30 })).status, 400);
+    assert.equal((await put('/api/worklogs/UP-1/101', { seconds: 90000 })).status, 400);
+    assert.equal((await put('/api/worklogs/UP-1/101', { comment: 'x'.repeat(5001) })).status, 400);
+    assert.equal((await put('/api/worklogs/bad%20key/101', { seconds: 60 })).status, 404);
+    assert.equal(jira.puts.length, 0);
+  } finally { server.close(); }
 });

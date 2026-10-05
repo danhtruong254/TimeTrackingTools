@@ -193,6 +193,17 @@
   .entry-head .title { flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .entry-date { font-size: 12px; color: var(--fg-subtle); }
   .comment { font-size: 12.5px; color: var(--fg-muted); white-space: pre-line; }
+  .edit-btn { width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--fg-muted); }
+  .edit-btn:hover { background: var(--bg-hover); border-color: var(--border); color: var(--fg); }
+  .editor { gap: 10px; }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 500; color: var(--fg-muted); }
+  .field input, .field textarea { font: 13.5px var(--font-ui); color: var(--fg); background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; }
+  .field input { width: 140px; height: 36px; font-family: var(--font-mono); }
+  .field textarea { resize: vertical; min-height: 64px; line-height: 1.4; }
+  .field small { font-weight: 400; color: var(--fg-subtle); }
+  .form-error { font-size: 12.5px; color: var(--red); }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .actions .btn { height: 36px; }
   .empty { min-height: 220px; padding: 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; color: var(--fg-muted); border: 1px dashed var(--border-strong); border-radius: 10px; }
   /* Loading: top progress bar, spinning refresh icon, dimmed content, skeleton on first load. */
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -354,7 +365,7 @@ let personChoice = (() => { try { return JSON.parse(localStorage.getItem('person
 // First month is guessed locally; the first load re-loads once if the server's timeZone says today is in another month.
 let seq = 0; // request token: only the latest load may touch state
 const initialMonth = todayIn(tzChoice || Intl.DateTimeFormat().resolvedOptions().timeZone).slice(0, 7);
-const state = { month: null, data: null, selected: null, groupBy: 'ticket', loading: false, error: null, pending: null, range: null };
+const state = { month: null, data: null, selected: null, groupBy: 'ticket', loading: false, error: null, pending: null, range: null, editing: null };
 // 'month' or 'sprint' (the active Core sprint, which can span months). Remembered per browser.
 let mode = (() => { try { return localStorage.getItem('mode') === 'sprint' ? 'sprint' : 'month'; } catch { return 'month'; } })();
 
@@ -517,17 +528,91 @@ function renderDay(d) {
   </button>`;
 }
 
+// ---- Editing a worklog (own worklogs only; the server re-checks ownership). ----
+const PENCIL_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>';
+const canEdit = (e) => Boolean(e.id) && (!personChoice || personChoice.accountId === state.data?.self?.accountId);
+
+// "1h 30m", "1.5h", "90m", "1:30" or a bare number of hours -> seconds (whole minutes); NaN if unreadable.
+function parseDuration(text) {
+  const t = text.trim().toLowerCase();
+  let m;
+  let minutes = NaN;
+  if ((m = t.match(/^(\d+):([0-5]\d)$/))) minutes = +m[1] * 60 + +m[2];
+  else if ((m = t.match(/^(\d+(?:\.\d+)?)\s*h(?:\s*(\d+)\s*m)?$/))) minutes = +m[1] * 60 + (+m[2] || 0);
+  else if ((m = t.match(/^(\d+)\s*m$/))) minutes = +m[1];
+  else if (/^\d+(?:\.\d+)?$/.test(t)) minutes = +t * 60;
+  return Math.round(minutes) * 60;
+}
+
+function renderEditor(e) {
+  const ed = state.editing;
+  return `<form class="row editor" data-editor="${esc(e.id)}" aria-label="Edit worklog on ${esc(e.issueKey)}">
+    <div class="entry-head">${link(e.issueKey)}<span class="title">${esc(splitTitle(e.summary).title)}</span></div>
+    <label class="field">Time <small>e.g. 1h 30m, 1.5h, 90m</small><input name="time" value="${esc(ed.time)}" autocomplete="off" required></label>
+    <label class="field">Description<textarea name="comment" rows="3">${esc(ed.comment)}</textarea></label>
+    ${ed.error ? `<div class="form-error" role="alert">${esc(ed.error)}</div>` : ''}
+    <div class="actions"><button type="button" class="btn" data-cancel>Cancel</button><button type="submit" class="btn btn-primary"${ed.saving ? ' disabled' : ''}>${ed.saving ? 'Saving…' : 'Save'}</button></div>
+  </form>`;
+}
+
+function startEdit(id) {
+  const e = state.data.entries.find((x) => x.id === id);
+  if (!e) return;
+  state.editing = { id, issueKey: e.issueKey, time: fmt(e.seconds), comment: e.comment, original: { seconds: e.seconds, comment: e.comment }, error: '', saving: false };
+  render();
+  $('#list [name="time"]').focus();
+}
+
+function cancelEdit() {
+  const id = state.editing?.id;
+  state.editing = null;
+  render();
+  document.querySelector(`#list [data-edit="${CSS.escape(id || '')}"]`)?.focus();
+}
+
+async function saveEdit() {
+  const ed = state.editing;
+  const seconds = parseDuration(ed.time);
+  if (!(seconds >= 60 && seconds <= 86400)) {
+    ed.error = 'Enter a time between 1m and 24h, like 1h 30m.';
+    render();
+    return $('#list [name="time"]').focus();
+  }
+  const change = {};
+  if (seconds !== ed.original.seconds) change.seconds = seconds;
+  if (ed.comment !== ed.original.comment) change.comment = ed.comment; // unchanged text keeps Jira's rich formatting
+  if (!Object.keys(change).length) return cancelEdit();
+  ed.saving = true;
+  ed.error = '';
+  render();
+  try {
+    const res = await fetch(`/api/worklogs/${encodeURIComponent(ed.issueKey)}/${encodeURIComponent(ed.id)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change),
+    });
+    const body = (await res.json().catch(() => null)) || {};
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    state.editing = null;
+    $('#status').textContent = 'Saved';
+    reload();
+  } catch (err) {
+    if (state.editing !== ed) return;
+    ed.saving = false;
+    ed.error = `Not saved: ${err.message}`;
+    render();
+  }
+}
+
 function renderList(entries) {
   if (!entries.length) {
     const where = state.selected ? `on ${dayLabel(state.selected)}` : 'this month';
     return `<div class="empty">${CLOCK_ICON}<span class="empty-title">No worklogs ${where}</span><span>Log time in Jira to fill this ${state.selected ? 'day' : 'month'}</span></div>`;
   }
   if (state.groupBy === 'entries') {
-    return entries.map((e) => `<div class="row">
-      <div class="entry-head">${link(e.issueKey)}<span class="title">${esc(splitTitle(e.summary).title)}</span><span class="dur">${fmt(e.seconds)}</span></div>
+    return entries.map((e) => (state.editing?.id === e.id ? renderEditor(e) : `<div class="row">
+      <div class="entry-head">${link(e.issueKey)}<span class="title">${esc(splitTitle(e.summary).title)}</span><span class="dur">${fmt(e.seconds)}</span>${canEdit(e) ? `<button type="button" class="edit-btn" data-edit="${esc(e.id)}" aria-label="Edit worklog on ${esc(e.issueKey)}, ${dayLabel(e.date)}">${PENCIL_ICON}</button>` : ''}</div>
       ${state.selected ? '' : `<span class="entry-date">${dayLabel(e.date)}</span>`}
       ${e.comment ? `<div class="comment">${esc(e.comment)}</div>` : ''}
-    </div>`).join('');
+    </div>`)).join('');
   }
   const rows = groupTotals(entries, 'ticket');
   return rows.map((r) => {
@@ -757,6 +842,23 @@ $('#target-editor').oninput = (e) => {
   render();
 };
 for (const b of document.querySelectorAll('#breakdown-tabs button')) b.onclick = () => { state.groupBy = b.dataset.view; render(); };
+$('#list').onclick = (e) => {
+  const edit = e.target.closest('[data-edit]');
+  if (edit) return startEdit(edit.dataset.edit);
+  if (e.target.closest('[data-cancel]')) cancelEdit();
+};
+$('#list').oninput = (e) => {
+  if (!state.editing || !e.target.closest('[data-editor]')) return;
+  if (e.target.name === 'time') state.editing.time = e.target.value;
+  if (e.target.name === 'comment') state.editing.comment = e.target.value;
+};
+$('#list').onsubmit = (e) => {
+  e.preventDefault();
+  if (state.editing && !state.editing.saving) saveEdit();
+};
+$('#list').onkeydown = (e) => {
+  if (e.key === 'Escape' && state.editing && e.target.closest('[data-editor]')) cancelEdit();
+};
 $('#cal').onclick = (e) => {
   const el = e.target.closest('.day');
   if (!el || el.classList.contains('future')) return;
