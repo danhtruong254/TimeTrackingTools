@@ -252,7 +252,7 @@ test('server caches past months only; refresh=1 bypasses', async () => {
   const server = await startServer(jira);
   try {
     const first = await get('/api/worklogs?month=2026-08');
-    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', person: { accountId: ME, displayName: 'Me Myself' }, entries: [], sprint: { name: 'Core 18-26', start: '2026-09-23', end: '2026-10-07' } });
+    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', person: { accountId: ME, displayName: 'Me Myself' }, self: { accountId: ME, displayName: 'Me Myself' }, entries: [], sprint: { name: 'Core 18-26', start: '2026-09-23', end: '2026-10-07' } });
     await get('/api/worklogs?month=2026-08');
     assert.equal(jira.searches, 1);
     await get('/api/worklogs?month=2026-08&refresh=1');
@@ -346,6 +346,7 @@ test('server shows another person with the account param', async () => {
     const r = await get('/api/worklogs?month=2026-08&account=acc-2');
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.person, { accountId: 'acc-2', displayName: 'Thuy Ha' });
+    assert.deepEqual(r.body.self, { accountId: ME, displayName: 'Me Myself' }); // who "you" is, whoever is viewed
     assert.equal(r.body.profileTimeZone, 'Asia/Ho_Chi_Minh');
     assert.match(jira.lastJql, /^worklogAuthor = "acc-2" AND/);
     const mine = await get('/api/worklogs?month=2026-08');

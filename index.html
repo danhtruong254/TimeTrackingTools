@@ -634,14 +634,15 @@ async function copySummary() {
 }
 
 // ---- People picker: searchable combobox (type to search Jira users, arrows + Enter to pick, Esc to cancel). ----
-const personLabel = () => (personChoice ? personChoice.displayName : `${state.data?.person?.displayName || 'Me'} (you)`);
+const myName = () => state.data?.self?.displayName || 'Me';
+const personLabel = () => (personChoice ? personChoice.displayName : `${myName()} (you)`);
 let people = []; // options currently listed: [{ accountId: '' for me, displayName, avatarUrl }]
 let activeIndex = -1;
 let searchSeq = 0;
 let searchTimer;
 
 function initials(name) {
-  return esc(name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase());
+  return esc(name.replace(/\(you\)/, '').split(/\s+/).filter((w) => /^\p{L}/u.test(w)).slice(0, 2).map((w) => w[0]).join('').toUpperCase());
 }
 
 function showPeople(list, hint) {
@@ -661,7 +662,7 @@ function closePeople() {
   $('#person').removeAttribute('aria-activedescendant');
 }
 
-const meOption = () => ({ accountId: '', displayName: `${state.data?.person && !personChoice ? state.data.person.displayName : 'Me'} (you)`, avatarUrl: '' });
+const meOption = () => ({ accountId: '', displayName: `${myName()} (you)`, avatarUrl: '' });
 
 async function searchPeople(q) {
   const id = ++searchSeq;

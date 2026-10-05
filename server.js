@@ -286,8 +286,10 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
       const past = isPastMonth(month, timeZone, now());
       if (past && !refresh && cache.has(key)) return json(200, { ...cache.get(key), sprint: sprintIn(await getSprint(false), timeZone) });
       const person = { accountId, displayName };
+      const me = await getMe(); // already cached by getPerson
+      const self = { accountId: me.accountId, displayName: me.displayName }; // who "you" is, whoever is being viewed
       const [entries, sprint] = await Promise.all([fetchMonth(jira, month, { accountId, timeZone }), getSprint(refresh)]);
-      const body = { baseUrl, timeZone, profileTimeZone, person, entries };
+      const body = { baseUrl, timeZone, profileTimeZone, person, self, entries };
       if (past) cache.set(key, body); // sprint is added per response, so cached months never hold a stale one
       json(200, { ...body, sprint: sprintIn(sprint, timeZone) });
     } catch (err) {
