@@ -213,10 +213,13 @@ function fakeJira(myself = { accountId: ME, displayName: 'Me Myself', timeZone: 
         { id: 'customfield_10014', name: 'Story Points', schema: { custom: 'com.atlassian.jira.plugin.system.customfieldtypes:float' } },
       ];
     }
-    if (p === '/rest/api/3/search/jql' && JSON.parse(init.body).jql.includes(' AND resolved >= ')) {
-      jira.doneJql = JSON.parse(init.body).jql;
-      jira.doneFields = JSON.parse(init.body).fields;
+    if (p === '/rest/api/3/search/jql' && JSON.parse(init.body).jql.startsWith('status CHANGED TO')) {
+      jira.doneBody = JSON.parse(init.body);
       return { issues: jira.doneIssues };
+    }
+    if (p.startsWith('/rest/api/3/issue/UP-6/changelog?')) {
+      jira.changelogCalls.push(p);
+      return { startAt: 0, total: 3, isLast: true, values: jira.fullChangelog };
     }
     if (p === '/rest/api/3/search/jql' && JSON.parse(init.body).jql.includes('openSprints()')) {
       jira.sprintSearches++;
@@ -241,6 +244,7 @@ function fakeJira(myself = { accountId: ME, displayName: 'Me Myself', timeZone: 
   jira.searches = 0;
   jira.sprintSearches = 0;
   jira.doneIssues = [];
+  jira.changelogCalls = [];
   return jira;
 }
 
@@ -512,24 +516,35 @@ test('server refuses unsafe or invalid worklog edits', async () => {
   } finally { server.close(); }
 });
 
-test('server lists tickets the person resolved in the month, with story points, on their local day', async () => {
+test('server counts a ticket as done on the day the person first moved it to QA Ready or QA Completed', async () => {
   const jira = fakeJira();
+  const move = (accountId, created, to) => ({ author: { accountId }, created, items: [{ field: 'status', fromString: 'In Review', toString: to }] });
+  const issue = (key, fields, histories, total = histories.length) => ({ key, fields: { summary: key, ...fields }, changelog: { startAt: 0, maxResults: histories.length, total, histories } });
   jira.doneIssues = [
-    { key: 'UP-1', fields: { summary: 'A', resolutiondate: '2026-08-31T18:30:00.000+0000', customfield_10014: 1, customfield_10028: null } }, // 1 Sep in +07
-    { key: 'UP-2', fields: { summary: 'B', resolutiondate: '2026-09-10T03:00:00.000+0000', customfield_10014: null, customfield_10028: 0.5 } }, // falls back to estimate field
-    { key: 'UP-3', fields: { summary: 'C', resolutiondate: '2026-09-11T03:00:00.000+0000' } }, // no points
-    { key: 'UP-4', fields: { summary: 'D', resolutiondate: '2026-08-30T03:00:00.000+0000', customfield_10014: 3 } }, // August
+    issue('UP-1', { customfield_10014: 1 }, [move('acc-2', '2026-08-31T11:30:00.000-0700', 'QA Ready')]), // 1 Sep in +07
+    issue('UP-2', { customfield_10014: null, customfield_10028: 0.5 }, [
+      move('acc-2', '2026-09-05T03:00:00.000+0000', 'In Review'),
+      move('acc-2', '2026-09-10T03:00:00.000+0000', 'QA Completed'),
+    ]),
+    issue('UP-3', {}, [move('someone', '2026-09-09T03:00:00.000+0000', 'QA Ready'), move('acc-2', '2026-09-11T03:00:00.000+0000', 'qa completed')]),
+    issue('UP-4', { customfield_10014: 3 }, [move('acc-2', '2026-08-30T03:00:00.000+0000', 'QA Ready'), move('acc-2', '2026-09-03T03:00:00.000+0000', 'QA Completed')]), // first move in August
+    issue('UP-5', { customfield_10014: 2 }, [move('someone', '2026-09-15T03:00:00.000+0000', 'QA Ready')]),
+    issue('UP-6', {}, [move('someone', '2026-09-20T03:00:00.000+0000', 'In Test')], 3), // truncated: fetched in full
   ];
+  jira.fullChangelog = [move('acc-2', '2026-09-12T03:00:00.000+0000', 'QA Ready'), move('someone', '2026-09-20T03:00:00.000+0000', 'In Test')];
   const server = await startServer(jira);
   try {
     const r = await get('/api/worklogs?month=2026-09&tz=Asia/Ho_Chi_Minh&account=acc-2');
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.done, [
-      { date: '2026-09-01', issueKey: 'UP-1', summary: 'A', points: 1 },
-      { date: '2026-09-10', issueKey: 'UP-2', summary: 'B', points: 0.5 },
-      { date: '2026-09-11', issueKey: 'UP-3', summary: 'C', points: 0 },
+      { date: '2026-09-01', issueKey: 'UP-1', summary: 'UP-1', points: 1 },
+      { date: '2026-09-10', issueKey: 'UP-2', summary: 'UP-2', points: 0.5 },
+      { date: '2026-09-11', issueKey: 'UP-3', summary: 'UP-3', points: 0 },
+      { date: '2026-09-12', issueKey: 'UP-6', summary: 'UP-6', points: 0 },
     ]);
-    assert.equal(jira.doneJql, 'assignee = "acc-2" AND resolved >= "2026-08-31" AND resolved <= "2026-10-01"');
-    assert.deepEqual(jira.doneFields, ['summary', 'resolutiondate', 'customfield_10014', 'customfield_10028']);
+    assert.equal(jira.doneBody.jql, 'status CHANGED TO ("QA Ready", "QA Completed") BY "acc-2" DURING ("2026-08-31", "2026-10-01")');
+    assert.equal(jira.doneBody.expand, 'changelog');
+    assert.deepEqual(jira.doneBody.fields, ['summary', 'customfield_10014', 'customfield_10028']);
+    assert.deepEqual(jira.changelogCalls, ['/rest/api/3/issue/UP-6/changelog?startAt=0&maxResults=100']);
   } finally { server.close(); }
 });

@@ -120,7 +120,7 @@ Ported from the `Main.dc.html` design canvas and `tokens.json`; display only, th
 
 ### Story points done
 
-- Server adds `done: [{date, issueKey, summary, points}]`: tickets assigned to the viewed person with `resolved` in the month (JQL widened ±1 day), placed on their local resolution day. Points come from "Story Points", falling back to "Story point estimate"; missing = 0. A failed lookup gives `done: null` (month not cached) without failing the request.
+- Server adds `done: [{date, issueKey, summary, points}]`. A ticket is done on the day the viewed person *first* moved it to "QA Ready" or "QA Completed" (`DONE_STATUSES`), counted once. JQL `status CHANGED TO ("QA Ready", "QA Completed") BY "<accountId>" DURING (start-1d, end+1d)` with `expand: changelog` (full changelog fetched only when truncated); the first matching move by that person gives the local date, and tickets first moved in another month are left to that month. Points come from "Story Points", falling back to "Story point estimate"; missing = 0. A failed lookup gives `done: null` (month not cached) without failing the request.
 - UI: per-day chip on the progress-bar row, a "Story points" KPI card (total + tickets done), points in the breakdown header and in Copy summary. Sprint view merges `done` across the sprint's months.
 - Team rule: a done card with 0 (or no) story points counts as 1/6 SP, so 3 such cards = 0.5 SP (`ZERO_POINT_CARD_VALUE`).
 

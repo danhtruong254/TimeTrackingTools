@@ -195,27 +195,51 @@ async function fetchMonth(jira, month, person) {
 const POINT_FIELD_NAMES = ['story points', 'story point estimate'];
 const pointFieldIds = (fields) => POINT_FIELD_NAMES.map((n) => fields.find((f) => f.name?.toLowerCase() === n)?.id).filter(Boolean);
 
-// Tickets assigned to the person and resolved in the month, placed on their local resolution day.
+// "Done" = the day the person first moved the ticket to one of these statuses (counted once per ticket).
+const DONE_STATUSES = ['QA Ready', 'QA Completed'];
+const DONE_SET = new Set(DONE_STATUSES.map((n) => n.toLowerCase()));
+
+async function fullChangelog(jira, key) {
+  const histories = [];
+  for (let startAt = 0; ;) {
+    const page = await jira(`/rest/api/3/issue/${key}/changelog?startAt=${startAt}&maxResults=100`);
+    histories.push(...page.values);
+    startAt += page.values.length;
+    if (page.isLast || !page.values.length || startAt >= page.total) return histories;
+  }
+}
+
 async function fetchDone(jira, month, person, fields) {
   const r = monthRange(month);
   const ids = pointFieldIds(fields);
-  const jql = `assignee = "${person.accountId}" AND resolved >= "${r.jqlFrom}" AND resolved <= "${r.jqlTo}"`;
-  const done = [];
+  const statuses = DONE_STATUSES.map((n) => `"${n}"`).join(', ');
+  const jql = `status CHANGED TO (${statuses}) BY "${person.accountId}" DURING ("${r.jqlFrom}", "${r.jqlTo}")`;
+  const issues = [];
   let nextPageToken;
   do {
     const page = await jira('/rest/api/3/search/jql', {
       method: 'POST',
-      body: JSON.stringify({ jql, fields: ['summary', 'resolutiondate', ...ids], maxResults: 100, nextPageToken }),
+      body: JSON.stringify({ jql, fields: ['summary', ...ids], expand: 'changelog', maxResults: 100, nextPageToken }),
     });
-    for (const issue of page.issues) {
-      const date = localDate(new Date(normalizeStarted(issue.fields.resolutiondate)), person.timeZone);
-      if (!date.startsWith(`${month}-`)) continue;
-      const points = ids.map((id) => issue.fields[id]).find((v) => typeof v === 'number') || 0;
-      done.push({ date, issueKey: issue.key, summary: issue.fields.summary, points });
-    }
+    issues.push(...page.issues);
     nextPageToken = page.nextPageToken;
   } while (nextPageToken);
-  return done.sort((a, b) => a.date.localeCompare(b.date));
+
+  const done = [];
+  await mapLimit(issues, CONCURRENCY, async (issue) => {
+    const log = issue.changelog;
+    const histories = log && log.total <= log.histories.length ? log.histories : await fullChangelog(jira, issue.key);
+    const firstMove = histories
+      .filter((h) => h.author?.accountId === person.accountId && h.items.some((it) => it.field === 'status' && DONE_SET.has(String(it.toString).toLowerCase())))
+      .map((h) => new Date(normalizeStarted(h.created)))
+      .sort((a, b) => a - b)[0];
+    if (!firstMove) return;
+    const date = localDate(firstMove, person.timeZone);
+    if (!date.startsWith(`${month}-`)) return; // first moved in another month: counted there
+    const points = ids.map((id) => issue.fields[id]).find((v) => typeof v === 'number') || 0;
+    done.push({ date, issueKey: issue.key, summary: issue.fields.summary, points });
+  });
+  return done.sort((a, b) => a.date.localeCompare(b.date) || a.issueKey.localeCompare(b.issueKey));
 }
 
 async function fetchSprint(jira, fields) {
