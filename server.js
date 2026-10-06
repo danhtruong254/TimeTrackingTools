@@ -191,8 +191,34 @@ async function fetchMonth(jira, month, person) {
   return toEntries(issues, worklogsByIssue, person.accountId, month, person.timeZone);
 }
 
-async function fetchSprint(jira) {
-  const fields = await jira('/rest/api/3/field');
+// Story points live in "Story Points" on this site; team-managed projects use "Story point estimate".
+const POINT_FIELD_NAMES = ['story points', 'story point estimate'];
+const pointFieldIds = (fields) => POINT_FIELD_NAMES.map((n) => fields.find((f) => f.name?.toLowerCase() === n)?.id).filter(Boolean);
+
+// Tickets assigned to the person and resolved in the month, placed on their local resolution day.
+async function fetchDone(jira, month, person, fields) {
+  const r = monthRange(month);
+  const ids = pointFieldIds(fields);
+  const jql = `assignee = "${person.accountId}" AND resolved >= "${r.jqlFrom}" AND resolved <= "${r.jqlTo}"`;
+  const done = [];
+  let nextPageToken;
+  do {
+    const page = await jira('/rest/api/3/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({ jql, fields: ['summary', 'resolutiondate', ...ids], maxResults: 100, nextPageToken }),
+    });
+    for (const issue of page.issues) {
+      const date = localDate(new Date(normalizeStarted(issue.fields.resolutiondate)), person.timeZone);
+      if (!date.startsWith(`${month}-`)) continue;
+      const points = ids.map((id) => issue.fields[id]).find((v) => typeof v === 'number') || 0;
+      done.push({ date, issueKey: issue.key, summary: issue.fields.summary, points });
+    }
+    nextPageToken = page.nextPageToken;
+  } while (nextPageToken);
+  return done.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+async function fetchSprint(jira, fields) {
   const field = fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint');
   if (!field) return null;
   let nextPageToken;
@@ -232,12 +258,14 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
   const people = new Map(); // accountId -> { accountId, displayName, timeZone }
   let me;
   let sprintCache = { at: -Infinity, value: null };
+  let fieldsPromise; // Jira's field list, fetched once (retried after a failure)
+  const getFields = () => (fieldsPromise ??= jira('/rest/api/3/field').catch((err) => { fieldsPromise = undefined; throw err; }));
 
   // Highlighting is a nice-to-have: a failed lookup gives no highlight instead of failing the month.
   async function getSprint(force) {
     if (!force && now() - sprintCache.at < SPRINT_TTL_MS) return sprintCache.value;
     try {
-      sprintCache = { at: +now(), value: await fetchSprint(jira) };
+      sprintCache = { at: +now(), value: await fetchSprint(jira, await getFields()) };
     } catch (err) {
       console.warn(`Sprint lookup failed: ${err.message}`);
       return null;
@@ -335,9 +363,14 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
       const person = { accountId, displayName };
       const me = await getMe(); // already cached by getPerson
       const self = { accountId: me.accountId, displayName: me.displayName }; // who "you" is, whoever is being viewed
-      const [entries, sprint] = await Promise.all([fetchMonth(jira, month, { accountId, timeZone }), getSprint(refresh)]);
-      const body = { baseUrl, timeZone, profileTimeZone, person, self, entries };
-      if (past) cache.set(key, body); // sprint is added per response, so cached months never hold a stale one
+      // Done tickets are extra information: a failed lookup gives done: null instead of failing the month.
+      const done = getFields().then((fields) => fetchDone(jira, month, { accountId, timeZone }, fields)).catch((err) => {
+        console.warn(`Done-tickets lookup failed: ${err.message}`);
+        return null;
+      });
+      const [entries, sprint, doneList] = await Promise.all([fetchMonth(jira, month, { accountId, timeZone }), getSprint(refresh), done]);
+      const body = { baseUrl, timeZone, profileTimeZone, person, self, entries, done: doneList };
+      if (past && doneList) cache.set(key, body); // sprint is added per response; a failed done lookup is retried next time
       json(200, { ...body, sprint: sprintIn(sprint, timeZone) });
     } catch (err) {
       console.error(err.message);
@@ -350,7 +383,7 @@ function createServer({ jira, baseUrl, port, now = () => new Date() }) {
 
 module.exports = {
   normalizeStarted, localDate, monthRange, isPastMonth, adfText, textToAdf, toEntries,
-  JiraError, retryDelayMs, createJira, mapLimit, fetchMonth, createServer,
+  JiraError, retryDelayMs, createJira, mapLimit, fetchMonth, fetchDone, createServer,
 };
 
 if (require.main === module) {

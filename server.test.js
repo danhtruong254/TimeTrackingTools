@@ -205,7 +205,19 @@ function get(pathname, host = `127.0.0.1:${TEST_PORT}`) {
 function fakeJira(myself = { accountId: ME, displayName: 'Me Myself', timeZone: 'UTC' }) {
   const jira = async (p, init) => {
     if (p === '/rest/api/3/myself') return myself;
-    if (p === '/rest/api/3/field') return [{ id: 'summary', schema: {} }, { id: 'customfield_10010', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } }];
+    if (p === '/rest/api/3/field') {
+      return [
+        { id: 'summary', name: 'Summary', schema: {} },
+        { id: 'customfield_10010', name: 'Sprint', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } },
+        { id: 'customfield_10028', name: 'Story point estimate', schema: { custom: 'com.pyxis.greenhopper.jira:jsw-story-points' } },
+        { id: 'customfield_10014', name: 'Story Points', schema: { custom: 'com.atlassian.jira.plugin.system.customfieldtypes:float' } },
+      ];
+    }
+    if (p === '/rest/api/3/search/jql' && JSON.parse(init.body).jql.includes(' AND resolved >= ')) {
+      jira.doneJql = JSON.parse(init.body).jql;
+      jira.doneFields = JSON.parse(init.body).fields;
+      return { issues: jira.doneIssues };
+    }
     if (p === '/rest/api/3/search/jql' && JSON.parse(init.body).jql.includes('openSprints()')) {
       jira.sprintSearches++;
       return { issues: [{ key: 'UP-1', fields: { customfield_10010: [
@@ -228,6 +240,7 @@ function fakeJira(myself = { accountId: ME, displayName: 'Me Myself', timeZone: 
   };
   jira.searches = 0;
   jira.sprintSearches = 0;
+  jira.doneIssues = [];
   return jira;
 }
 
@@ -252,7 +265,7 @@ test('server caches past months only; refresh=1 bypasses', async () => {
   const server = await startServer(jira);
   try {
     const first = await get('/api/worklogs?month=2026-08');
-    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', person: { accountId: ME, displayName: 'Me Myself' }, self: { accountId: ME, displayName: 'Me Myself' }, entries: [], sprint: { name: 'Core 18-26', start: '2026-09-23', end: '2026-10-07' } });
+    assert.deepEqual(first.body, { baseUrl: 'https://x.atlassian.net', timeZone: 'UTC', profileTimeZone: 'UTC', person: { accountId: ME, displayName: 'Me Myself' }, self: { accountId: ME, displayName: 'Me Myself' }, entries: [], done: [], sprint: { name: 'Core 18-26', start: '2026-09-23', end: '2026-10-07' } });
     await get('/api/worklogs?month=2026-08');
     assert.equal(jira.searches, 1);
     await get('/api/worklogs?month=2026-08&refresh=1');
@@ -496,5 +509,27 @@ test('server refuses unsafe or invalid worklog edits', async () => {
     assert.equal((await put('/api/worklogs/UP-1/101', { comment: 'x'.repeat(5001) })).status, 400);
     assert.equal((await put('/api/worklogs/bad%20key/101', { seconds: 60 })).status, 404);
     assert.equal(jira.puts.length, 0);
+  } finally { server.close(); }
+});
+
+test('server lists tickets the person resolved in the month, with story points, on their local day', async () => {
+  const jira = fakeJira();
+  jira.doneIssues = [
+    { key: 'UP-1', fields: { summary: 'A', resolutiondate: '2026-08-31T18:30:00.000+0000', customfield_10014: 1, customfield_10028: null } }, // 1 Sep in +07
+    { key: 'UP-2', fields: { summary: 'B', resolutiondate: '2026-09-10T03:00:00.000+0000', customfield_10014: null, customfield_10028: 0.5 } }, // falls back to estimate field
+    { key: 'UP-3', fields: { summary: 'C', resolutiondate: '2026-09-11T03:00:00.000+0000' } }, // no points
+    { key: 'UP-4', fields: { summary: 'D', resolutiondate: '2026-08-30T03:00:00.000+0000', customfield_10014: 3 } }, // August
+  ];
+  const server = await startServer(jira);
+  try {
+    const r = await get('/api/worklogs?month=2026-09&tz=Asia/Ho_Chi_Minh&account=acc-2');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.done, [
+      { date: '2026-09-01', issueKey: 'UP-1', summary: 'A', points: 1 },
+      { date: '2026-09-10', issueKey: 'UP-2', summary: 'B', points: 0.5 },
+      { date: '2026-09-11', issueKey: 'UP-3', summary: 'C', points: 0 },
+    ]);
+    assert.equal(jira.doneJql, 'assignee = "acc-2" AND resolved >= "2026-08-31" AND resolved <= "2026-10-01"');
+    assert.deepEqual(jira.doneFields, ['summary', 'resolutiondate', 'customfield_10014', 'customfield_10028']);
   } finally { server.close(); }
 });

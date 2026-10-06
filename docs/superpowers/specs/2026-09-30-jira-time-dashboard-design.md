@@ -118,6 +118,12 @@ Ported from the `Main.dc.html` design canvas and `tokens.json`; display only, th
 - Entries tab shows an Edit button per entry when viewing yourself. Inline form: time ("1h 30m", "1.5h", "90m", "1:30", bare hours; 1m–24h, whole minutes) and description. Save sends only changed fields; an unchanged description keeps its Jira rich formatting, a changed one is sent as plain-text ADF paragraphs.
 - `PUT /api/worklogs/:issueKey/:worklogId` with `{seconds?, comment?}`. Guards: `Origin` must be this dashboard (CSRF), `Content-Type: application/json`, body ≤ 16 KB, validated fields; the worklog is fetched first and must belong to you (403 otherwise). Jira call uses `adjustEstimate=leave&notifyUsers=false`. Your cached months are dropped after a save, then the view reloads.
 
+### Story points done
+
+- Server adds `done: [{date, issueKey, summary, points}]`: tickets assigned to the viewed person with `resolved` in the month (JQL widened ±1 day), placed on their local resolution day. Points come from "Story Points", falling back to "Story point estimate"; missing = 0. A failed lookup gives `done: null` (month not cached) without failing the request.
+- UI: per-day chip on the progress-bar row, a "Story points" KPI card (total + tickets done), points in the breakdown header and in Copy summary. Sprint view merges `done` across the sprint's months.
+- Team rule: a done card with 0 (or no) story points counts as 1/6 SP, so 3 such cards = 0.5 SP (`ZERO_POINT_CARD_VALUE`).
+
 ## Error handling
 
 - Missing env var at startup: exit with a message naming the missing variable.

@@ -23,3 +23,8 @@ test('weekends never get a target', () => {
   assert.match(html, /if \(WEEKEND\.has\(weekday\(date\)\)\) return 0;/);
   assert.doesNotMatch(html, /data-day="Sat"|data-day="Sun"/);
 });
+
+test('done cards with 0 story points count as 1/6 SP (3 cards = 0.5)', () => {
+  assert.match(html, /const ZERO_POINT_CARD_VALUE = 0\.5 \/ 3;/);
+  assert.match(html, /t\.points \|\| ZERO_POINT_CARD_VALUE/);
+});

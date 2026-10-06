@@ -137,6 +137,9 @@
   .day-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; width: 100%; }
   .day .n { font-size: 13px; font-weight: 600; color: var(--fg-muted); }
   .day-bottom { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+  .meter { display: flex; align-items: center; gap: 6px; }
+  .meter .track { flex: 1; }
+  .pts { flex-shrink: 0; padding: 0 5px; font-size: 10.5px; line-height: 15px; font-weight: 600; white-space: nowrap; color: var(--accent); background: var(--accent-soft); border-radius: 99px; }
   .day .h { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
   .day .track { height: 4px; }
   .day.full { background: var(--green-soft); border-color: var(--green-border); }
@@ -371,6 +374,8 @@ function targetMap() {
 }
 
 const WEEKEND = new Set(['Sat', 'Sun']);
+// Team rule: 3 done cards with 0 story points are worth 0.5 SP, so each counts as 1/6.
+const ZERO_POINT_CARD_VALUE = 0.5 / 3;
 
 // Saturday and Sunday are never workdays, whatever the profile says.
 function targetFor(date) {
@@ -382,6 +387,8 @@ function compute(data, range) {
   const today = todayIn(data.timeZone);
   const byDay = {};
   for (const e of data.entries) byDay[e.date] = (byDay[e.date] || 0) + e.seconds;
+  const pointsByDay = {}; // story points of tickets resolved that day
+  for (const t of data.done || []) pointsByDay[t.date] = (pointsByDay[t.date] || 0) + (t.points || ZERO_POINT_CARD_VALUE);
   const days = [];
   for (let date = range.start; date <= range.end; date = addDays(date, 1)) {
     const logged = byDay[date] || 0;
@@ -391,7 +398,7 @@ function compute(data, range) {
     else if (date === today) status = 'today';
     else if (target === 0) status = 'off';
     else status = logged >= target ? 'ok' : logged > 0 ? 'low' : 'zero';
-    days.push({ date, logged, target, status });
+    days.push({ date, logged, target, status, points: pointsByDay[date] || 0 });
   }
   const counted = days.filter((d) => d.status === 'ok' || d.status === 'low' || d.status === 'zero');
   return {
@@ -400,6 +407,8 @@ function compute(data, range) {
     target: sum(counted, (d) => d.target),
     gapDays: counted.filter((d) => d.logged < d.target).length,
     missing: sum(counted, (d) => Math.max(0, d.target - d.logged)),
+    points: sum(days, (d) => d.points),
+    doneCount: (data.done || []).filter((t) => t.date >= range.start && t.date <= range.end).length,
   };
 }
 
@@ -445,8 +454,9 @@ async function loadSprint(refresh = false) {
     const bodies = await Promise.all(months.map((m) => (m === current ? first : fetchMonth(m, refresh))));
     if (id !== seq) return;
     const entries = bodies.flatMap((b) => b.entries).filter((e) => e.date >= sp.start && e.date <= sp.end);
+    const done = bodies.every((b) => b.done) ? bodies.flatMap((b) => b.done).filter((t) => t.date >= sp.start && t.date <= sp.end) : null;
     if (state.range?.start !== sp.start || state.range?.end !== sp.end) state.selected = null;
-    Object.assign(state, { month: state.month || current, data: { ...first, entries }, range: { start: sp.start, end: sp.end }, pending: null, error: null });
+    Object.assign(state, { month: state.month || current, data: { ...first, entries, done }, range: { start: sp.start, end: sp.end }, pending: null, error: null });
     $('#tz option[value=""]').textContent = `Jira profile (${first.profileTimeZone})`;
   } catch (err) {
     if (id !== seq) return;
@@ -492,6 +502,7 @@ const CLOCK_ICON = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" 
 const TONE_COLOR = { full: 'green', partial: 'amber', missing: 'red' };
 
 const dayLabel = (date) => `${weekday(date)}, ${Number(date.slice(8))} ${MONTH_SHORT.format(new Date(toMs(date)))}`;
+const spText = (n) => `${Math.round(n * 100) / 100} SP`;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const bar = (pct) => `<span class="track"><span class="fill" style="width:${Math.min(100, Math.max(0, pct))}%"></span></span>`;
 
@@ -522,10 +533,10 @@ function renderDay(d) {
   const label = t === 'future' ? '' : t === 'none' && !isToday ? '—' : fmt(d.logged);
   const pct = t === 'future' ? 0 : (d.logged / (d.target || 8 * 3600)) * 100;
   const badge = isToday ? '<span class="chip-today">Today</span>' : over ? `<span class="over">+${fmt(d.logged - d.target)}</span>` : '';
-  const aria = `${d.date} ${weekday(d.date)}, ${t === 'future' ? '' : `${fmt(d.logged)}, `}${STATUS_TEXT[d.status]}${inSprint ? `, in sprint ${esc(sp.name)}` : ''}`;
+  const aria = `${d.date} ${weekday(d.date)}, ${t === 'future' ? '' : `${fmt(d.logged)}, `}${STATUS_TEXT[d.status]}${inSprint ? `, in sprint ${esc(sp.name)}` : ''}${d.points ? `, ${spText(d.points).replace('SP', 'story points')} done` : ''}`;
   return `<button type="button" class="day ${t}${isToday ? ' today' : ''}${sel ? ' sel' : ''}${inSprint ? ' sprint' : ''}" data-date="${d.date}" aria-pressed="${sel}" aria-label="${aria}"${t === 'future' ? ' disabled' : ''}>
     <span class="day-top"><span class="n">${Number(d.date.slice(8))}${mode === 'sprint' && (d.date === state.range.start || d.date.endsWith('-01')) ? `<small>${MONTH_SHORT.format(new Date(toMs(d.date)))}</small>` : ''}</span>${badge}</span>
-    <span class="day-bottom"><span class="h">${label}</span>${bar(pct)}</span>
+    <span class="day-bottom"><span class="h">${label}</span><span class="meter">${bar(pct)}${d.points ? `<span class="pts" title="Story points done">${spText(d.points)}</span>` : ''}</span></span>
   </button>`;
 }
 
@@ -678,7 +689,8 @@ function render() {
     </div>
     <div class="kpi"><span class="kpi-label">Target</span><div class="kpi-value">${fmt(v.target)}</div></div>
     <div class="kpi"><span class="kpi-label">Gap days</span><div class="kpi-value${v.gapDays ? ' amber' : ''}">${v.gapDays}</div></div>
-    <div class="kpi${v.missing ? ' kpi-alert' : ''}"><span class="kpi-label">Missing</span><div class="kpi-value${v.missing ? ' red' : ''}">${fmt(v.missing)}</div></div>`;
+    <div class="kpi${v.missing ? ' kpi-alert' : ''}"><span class="kpi-label">Missing</span><div class="kpi-value${v.missing ? ' red' : ''}">${fmt(v.missing)}</div></div>
+    <div class="kpi"><span class="kpi-label">Story points</span><div class="kpi-value">${state.data.done ? spText(v.points).replace(' SP', '') : '—'}</div><span class="kpi-note">${state.data.done ? `${plural(v.doneCount, 'ticket')} done` : 'unavailable'}</span></div>`;
 
   const lead = (new Date(toMs(state.range.start)).getUTCDay() + 6) % 7; // Monday-first
   $('#cal').innerHTML = '<div aria-hidden="true"></div>'.repeat(lead) + v.days.map(renderDay).join('');
@@ -691,7 +703,9 @@ function render() {
   $('#side-title').textContent = state.selected ? dayLabel(state.selected) : $('#month-name').textContent;
   $('#side-sum').textContent = fmt(sum(entries, (e) => e.seconds));
   $('#side-sum').className = `side-sum ${selDay ? TONE_COLOR[tone(selDay)] || '' : ''}`;
-  $('#side-sub').textContent = entries.length ? `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} · ${plural(tickets, 'ticket')}` : 'nothing logged';
+  const shownPoints = selDay ? selDay.points : v.points;
+  $('#side-sub').textContent = (entries.length ? `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} · ${plural(tickets, 'ticket')}` : 'nothing logged')
+    + (shownPoints ? ` · ${spText(shownPoints)} done` : '');
   $('#list').innerHTML = renderList(entries);
 }
 
@@ -702,10 +716,11 @@ async function copySummary() {
   const lines = [
     `Jira time — ${state.data.person.displayName} — ${mode === 'sprint' ? `${state.data.sprint.name} (${state.range.start} – ${state.range.end})` : state.month} (${state.data.timeZone})`,
     `Logged ${fmt(v.logged)} · Target ${fmt(v.target)} · Gap days ${v.gapDays} · Missing ${fmt(v.missing)}`,
+    ...(state.data.done ? [`Story points done: ${spText(v.points)} (${plural(v.doneCount, 'ticket')})`] : []),
     `Target profile: ${profile}`,
     '',
     ...v.days.filter((d) => d.status !== 'future')
-      .map((d) => `${d.date} ${weekday(d.date)}  ${fmt(d.logged)}${d.status === 'today' ? ' (in progress)' : ''}`),
+      .map((d) => `${d.date} ${weekday(d.date)}  ${fmt(d.logged)}${d.points ? ` · ${spText(d.points)}` : ''}${d.status === 'today' ? ' (in progress)' : ''}`),
     '',
     'By ticket',
     ...groupTotals(state.data.entries, 'ticket').map((g) => `${g.key}  ${fmt(g.seconds)}  ${g.summary}`),
