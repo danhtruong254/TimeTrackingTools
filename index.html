@@ -240,15 +240,13 @@
     <div class="vsep"></div>
     <button id="refresh" class="btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>Refresh</button>
     <button id="copy" class="btn btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy summary</button>
-    <label class="tz">Target <span class="select-wrap"><select id="target-profile"><option value="everyday8">Every day 8h</option><option value="weekdays8">Weekdays 8h</option><option value="lightWeek">Light week</option><option value="custom">Custom</option></select></span></label>
+    <label class="tz">Target <span class="select-wrap"><select id="target-profile"><option value="weekdays8">Weekdays 8h</option><option value="lightWeek">Light week</option><option value="custom">Custom</option></select></span></label>
     <div id="target-editor" class="target-editor" aria-label="Custom daily targets" hidden>
       <label class="target-day">Mon<input class="target-input" data-day="Mon" type="number" min="0" max="24" step="0.25" aria-label="Monday target hours"></label>
       <label class="target-day">Tue<input class="target-input" data-day="Tue" type="number" min="0" max="24" step="0.25" aria-label="Tuesday target hours"></label>
       <label class="target-day">Wed<input class="target-input" data-day="Wed" type="number" min="0" max="24" step="0.25" aria-label="Wednesday target hours"></label>
       <label class="target-day">Thu<input class="target-input" data-day="Thu" type="number" min="0" max="24" step="0.25" aria-label="Thursday target hours"></label>
       <label class="target-day">Fri<input class="target-input" data-day="Fri" type="number" min="0" max="24" step="0.25" aria-label="Friday target hours"></label>
-      <label class="target-day">Sat<input class="target-input" data-day="Sat" type="number" min="0" max="24" step="0.25" aria-label="Saturday target hours"></label>
-      <label class="target-day">Sun<input class="target-input" data-day="Sun" type="number" min="0" max="24" step="0.25" aria-label="Sunday target hours"></label>
     </div>
     <label class="tz">Time zone <span class="select-wrap"><select id="tz"><option value="Asia/Ho_Chi_Minh">UTC+7 (local)</option><option value="">Jira profile</option></select></span></label>
     <label class="tz" for="person">Viewing
@@ -295,11 +293,10 @@
 <script>
 // Hours per weekday. 0 = day off (shown neutral, never counted as a gap).
 const TARGET_PROFILES = {
-  everyday8: { label: 'Every day 8h', targets: { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 8, Sun: 8 } },
   weekdays8: { label: 'Weekdays 8h', targets: { Mon: 8, Tue: 8, Wed: 8, Thu: 8, Fri: 8, Sat: 0, Sun: 0 } },
   lightWeek: { label: 'Light week', targets: { Mon: 6, Tue: 6, Wed: 6, Thu: 6, Fri: 6, Sat: 0, Sun: 0 } },
 };
-const DEFAULT_TARGET_PROFILE = 'everyday8';
+const DEFAULT_TARGET_PROFILE = 'weekdays8';
 const DEFAULT_CUSTOM_TARGETS = { ...TARGET_PROFILES.weekdays8.targets };
 // Timezone used to put worklogs on days. '' = Jira profile timezone. The choice is remembered per browser.
 const DEFAULT_TZ = 'Asia/Ho_Chi_Minh';
@@ -373,7 +370,11 @@ function targetMap() {
   return targetProfileChoice === 'custom' ? customTargets : TARGET_PROFILES[targetProfileChoice].targets;
 }
 
+const WEEKEND = new Set(['Sat', 'Sun']);
+
+// Saturday and Sunday are never workdays, whatever the profile says.
 function targetFor(date) {
+  if (WEEKEND.has(weekday(date))) return 0;
   return targetMap()[weekday(date)] || 0;
 }
 
@@ -497,7 +498,7 @@ const bar = (pct) => `<span class="track"><span class="fill" style="width:${Math
 // Display tone only; gap/missing KPIs still come from compute(). Weekends and days off with 0h are neutral ("—").
 function tone(d) {
   if (d.status === 'future') return 'future';
-  if (d.target > 0 && d.logged >= d.target) return 'full';
+  if (d.logged >= d.target && d.logged > 0) return 'full'; // includes time logged on a weekend (target 0)
   if (d.logged > 0) return 'partial';
   const weekend = weekday(d.date) === 'Sat' || weekday(d.date) === 'Sun';
   return d.status === 'today' || d.status === 'off' || weekend ? 'none' : 'missing';
